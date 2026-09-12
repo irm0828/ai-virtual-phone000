@@ -6,6 +6,7 @@ export function stripStateAndInnerForPrompt(text: string): string {
     return withoutState
         .replace(/\[状态栏\][\s\S]*?\[\/状态栏\]/g, "")
         .replace(/\[内心\][\s\S]*?\[\/内心\]/g, "")
+        .replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, "")
         .replace(/\n{3,}/g, "\n\n")
         .trim();
 }
