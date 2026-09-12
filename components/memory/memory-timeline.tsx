@@ -117,13 +117,16 @@ function parseEntry(evt: NativeTimelineEntry, userName: string): ParsedEntry | n
         if (m) {
             const raw = m[2];
             const inner = raw.match(/^([\s\S]*?)\n[（(]内心[：:]\s?([\s\S]+?)[）)]\s*$/);
+            const messageContent = (inner ? inner[1] : raw)
+                .replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, "")
+                .trim();
             return {
                 type: "chat",
                 id: evt.id,
                 timestamp: evt.timestamp,
                 sender: m[1],
                 isUser: m[1] === userName,
-                message: inner ? inner[1] : raw,
+                message: messageContent,
                 innerMonologue: inner ? inner[2] : undefined,
             };
         }
@@ -133,6 +136,7 @@ function parseEntry(evt: NativeTimelineEntry, userName: string): ParsedEntry | n
     if (evt.sourceApp === "chat" && evt.sourceDetail === "group") {
         const m = content.match(/^\[群聊「(.+?)」(?: [^\]]+)?\] (.+?): ([\s\S]*)$/);
         if (m) {
+            const messageContent = m[3].replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, "").trim();
             return {
                 type: "group",
                 id: evt.id,
@@ -140,7 +144,7 @@ function parseEntry(evt: NativeTimelineEntry, userName: string): ParsedEntry | n
                 groupName: m[1],
                 sender: m[2],
                 isUser: m[2] === userName,
-                message: m[3],
+                message: messageContent,
             };
         }
     }
