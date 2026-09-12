@@ -115,18 +115,17 @@ function parseEntry(evt: NativeTimelineEntry, userName: string): ParsedEntry | n
     if (evt.sourceApp === "chat" && evt.sourceDetail !== "group") {
         const m = content.match(/^\[私聊(?: [^\]]+)?\] (.+?): ([\s\S]*)$/);
         if (m) {
-            const raw = m[2];
+            let raw = m[2];
+            // Strip <thinking> tags first
+            raw = raw.replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, "").trim();
             const inner = raw.match(/^([\s\S]*?)\n[（(]内心[：:]\s?([\s\S]+?)[）)]\s*$/);
-            const messageContent = (inner ? inner[1] : raw)
-                .replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, "")
-                .trim();
             return {
                 type: "chat",
                 id: evt.id,
                 timestamp: evt.timestamp,
                 sender: m[1],
                 isUser: m[1] === userName,
-                message: messageContent,
+                message: inner ? inner[1] : raw,
                 innerMonologue: inner ? inner[2] : undefined,
             };
         }
