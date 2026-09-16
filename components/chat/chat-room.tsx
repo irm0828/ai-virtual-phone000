@@ -5855,17 +5855,17 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
                                 </div>
                             )}
                             {/* 思维链触发条（Claude app 风格）：点击打开底部弹窗 */}
-                            {renderMsg.reasoningText && msg.role !== "user" && uiRole(msg) !== "system" && (
+                            {(renderMsg.reasoningText || renderMsg.thinkingText) && msg.role !== "user" && uiRole(msg) !== "system" && (
                                 <div className="chat-msg-wrapper" data-role={uiRole(msg)} data-reasoning-row="" style={{ marginBottom: -8 }}>
                                     <div className="w-[40px] shrink-0" />
                                     <button
                                         type="button"
                                         className="chat-reasoning-trigger"
-                                        onClick={(e) => { e.stopPropagation(); setReasoningSheetText(renderMsg.reasoningText || null); }}
+                                        onClick={(e) => { e.stopPropagation(); setReasoningSheetText(renderMsg.thinkingText || renderMsg.reasoningText || null); }}
                                         aria-label="查看思考过程"
                                     >
                                         <Clock size={13} strokeWidth={1.8} className="chat-reasoning-trigger-icon" />
-                                        <span className="chat-reasoning-trigger-text">{reasoningPreviewLine(renderMsg.reasoningText)}</span>
+                                        <span className="chat-reasoning-trigger-text">{reasoningPreviewLine(renderMsg.thinkingText || renderMsg.reasoningText || "")}</span>
                                         <ChevronRight size={14} strokeWidth={1.8} className="chat-reasoning-trigger-icon" />
                                     </button>
                                 </div>
@@ -6119,22 +6119,6 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
                                             <BilingualTextBlock text={msg.displayProjected ? renderMsg.statusPanel : renderDisplayText(renderMsg.statusPanel, 6, false)} mode="markdown" defaultExpanded={session.collapseBilingualTranslation !== false ? false : true} />
                                         )
                                     )}
-                                </div>
-                            )}
-                            {/* Thinking chain card */}
-                            {hasFoldedPanel && expandedMonologueId === msg.id && renderMsg.thinkingText && (
-                                <div className="chat-thinking-card">
-                                    <div className="chat-thinking-header">
-                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                            <circle cx="12" cy="12" r="10"/>
-                                            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
-                                            <line x1="12" y1="17" x2="12.01" y2="17"/>
-                                        </svg>
-                                        <span className="chat-thinking-title">思维链</span>
-                                    </div>
-                                    <div className="chat-thinking-body">
-                                        <BilingualTextBlock text={msg.displayProjected ? renderMsg.thinkingText : renderDisplayText(renderMsg.thinkingText, 6, false)} mode="markdown" defaultExpanded={session.collapseBilingualTranslation !== false ? false : true} />
-                                    </div>
                                 </div>
                             )}
                             {/* Inner monologue card (sticky note / journal style) */}
