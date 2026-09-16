@@ -2414,7 +2414,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
             if (!(session.participantIds || []).includes(r.characterId)) continue;
             if (isGroupMuted(session, r.characterId)) continue;
             const responseBatchId = createResponseBatchId();
-            const { parts: rawParts, stateValues, freshStateValues, statusPanel, innerMonologue } = parseAIResponse(r.responseText, getCurrentStateForCharacter(r.characterId));
+            const { parts: rawParts, stateValues, freshStateValues, statusPanel, innerMonologue, thinkingText } = parseAIResponse(r.responseText, getCurrentStateForCharacter(r.characterId));
             const parts = stripInvalidStickerParts(rawParts, r.characterId);
             let attachedState = false;
             let savedAnyPart = false;
@@ -2552,6 +2552,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
                     statusRegionMode: customStatusActive && attachHere && statusPanel ? "custom" as const : undefined,
                     innerMonologue: attachHere && innerMonologue ? innerMonologue : undefined,
                     reasoningText: takeRoundReasoning(),
+                    thinkingText: attachHere && thinkingText ? thinkingText : undefined,
                     stateValues: attachHere && stateValues.length > 0 ? stateValues : undefined,
                     freshStateValues: attachHere ? freshStateValues : undefined,
                     senderCharacterId: r.characterId,
@@ -2575,7 +2576,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
                 });
             }
             // 面板没落到任何正常气泡上（纯静默，或整段只有拍一拍/群管理通知）→ 补空消息驮面板
-            if (!attachedState && (statusPanel || innerMonologue || stateValues.length > 0)) {
+            if (!attachedState && (statusPanel || innerMonologue || thinkingText || stateValues.length > 0)) {
                 throwIfGenerationStopped(guard);
                 const msg = pushChatMessage({
                     sessionId: session.id,
@@ -2589,6 +2590,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
                     statusRegionMode: customStatusActive && statusPanel ? "custom" as const : undefined,
                     innerMonologue,
                     reasoningText: takeRoundReasoning(),
+                    thinkingText,
                     stateValues: stateValues.length > 0 ? stateValues : undefined,
                     freshStateValues,
                     senderCharacterId: r.characterId,
@@ -2815,7 +2817,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
             ? getLatestStateValues(session.id)
             : getLatestCharacterStateValues(session.contactId);
 
-        const { parts: rawParts, stateValues, freshStateValues, statusPanel, innerMonologue } = parseAIResponse(aiResponseText, previousState);
+        const { parts: rawParts, stateValues, freshStateValues, statusPanel, innerMonologue, thinkingText } = parseAIResponse(aiResponseText, previousState);
         const parts = stripInvalidStickerParts(rawParts);
         throwIfGenerationStopped(options);
 
@@ -2871,7 +2873,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
 
         if (filteredParts.length === 0) {
             // Silence: only status panel / inner monologue / reasoning, no visible chat text
-            if (statusPanel || innerMonologue || options?.reasoningText) {
+            if (statusPanel || innerMonologue || options?.reasoningText || thinkingText) {
                 throwIfGenerationStopped(options);
                 const aiMsg = pushChatMessage({
                     sessionId: session.id,
@@ -2883,6 +2885,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
                     statusRegionMode: customStatusActive && statusPanel ? "custom" as const : undefined,
                     innerMonologue,
                     reasoningText: options?.reasoningText,
+                    thinkingText,
                     stateValues: stateValues.length > 0 ? stateValues : undefined,
                     freshStateValues,
                 });
@@ -2916,6 +2919,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
                 statusRegionMode: customStatusActive && idx === metaIdx && statusPanel ? "custom" as const : undefined,
                 innerMonologue: idx === metaIdx && innerMonologue ? innerMonologue : undefined,
                 reasoningText: idx === metaIdx ? options?.reasoningText : undefined,
+                thinkingText: idx === metaIdx && thinkingText ? thinkingText : undefined,
                 stateValues: idx === metaIdx && stateValues.length > 0 ? stateValues : undefined,
                 freshStateValues: idx === metaIdx ? freshStateValues : undefined,
             }, options);
@@ -4561,6 +4565,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
                 statusPanel?: string;
                 statusRegionMode?: "custom";
                 innerMonologue?: string;
+                thinkingText?: string;
                 stateValues?: StateValue[];
                 freshStateValues?: StateValue[];
                 senderCharacterId?: string;
@@ -4577,7 +4582,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
             };
             for (const segment of segments) {
                 const responseBatchId = createResponseBatchId();
-                const { parts: rawParts, stateValues, freshStateValues, statusPanel, innerMonologue } = parseAIResponse(segment.responseText, getCurrentStateForCharacter(segment.characterId));
+                const { parts: rawParts, stateValues, freshStateValues, statusPanel, innerMonologue, thinkingText } = parseAIResponse(segment.responseText, getCurrentStateForCharacter(segment.characterId));
                 const parts = stripInvalidStickerParts(rawParts, segment.characterId);
                 const normalizedParts = normalizeEditedAssistantParts(parts, segment.characterName, {
                     omitHandledFinancialActions: true,
@@ -4603,7 +4608,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
                     });
                     if (attachHere) attachedState = true;
                 }
-                if (!attachedState && (statusPanel || innerMonologue || stateValues.length > 0)) {
+                if (!attachedState && (statusPanel || innerMonologue || thinkingText || stateValues.length > 0)) {
                     replacementMessages.push({
                         content: "",
                         rawResponseText: segment.responseText,
@@ -4611,6 +4616,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
                         statusPanel,
                         statusRegionMode: customStatusActive && statusPanel ? "custom" as const : undefined,
                         innerMonologue,
+                        thinkingText,
                         stateValues: stateValues.length > 0 ? stateValues : undefined,
                         freshStateValues,
                         senderCharacterId: segment.characterId,
@@ -4675,10 +4681,10 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
             ? getLatestStateValues(session.id)
             : getLatestCharacterStateValues(session.contactId, stateCutoff ? { before: stateCutoff } : undefined);
 
-        const { parts: rawParts, stateValues, freshStateValues, statusPanel, innerMonologue } = parseAIResponse(editedResponseContent, previousState);
+        const { parts: rawParts, stateValues, freshStateValues, statusPanel, innerMonologue, thinkingText } = parseAIResponse(editedResponseContent, previousState);
         const parts = stripInvalidStickerParts(rawParts);
         const normalizedParts = normalizeEditedAssistantParts(parts);
-        if (normalizedParts.length === 0 && (statusPanel || innerMonologue)) {
+        if (normalizedParts.length === 0 && (statusPanel || innerMonologue || thinkingText)) {
             normalizedParts.push({ content: "" });
         }
         if (normalizedParts.length === 0) {
@@ -4689,7 +4695,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
         // 那类系统小字不显示面板）；全是系统样式时补空消息驮面板
         let metaPartIndex = normalizedParts.findIndex(canCarryFoldedPanel);
         if (metaPartIndex === -1) {
-            if (statusPanel || innerMonologue || stateValues.length > 0) {
+            if (statusPanel || innerMonologue || thinkingText || stateValues.length > 0) {
                 normalizedParts.push({ content: "" });
                 metaPartIndex = normalizedParts.length - 1;
             } else {
@@ -4710,6 +4716,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
                 statusPanel,
                 statusRegionMode: originalStatusRegionMode,
                 innerMonologue,
+                thinkingText,
                 stateValues: stateValues.length > 0 ? stateValues : undefined,
                 freshStateValues,
                 metaPartIndex,
@@ -5817,7 +5824,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
                     const visibleContent = getChatFlowVisibleContent(renderMsg, bubbleDisplayContent);
                     const isVisualMedia = isChatVisualMedia(renderMsg);
                     const hiddenEmpty = isHiddenChatFlowMessage(renderMsg, bubbleDisplayContent);
-                    const hasFoldedPanel = !!(renderMsg.statusPanel || renderMsg.innerMonologue);
+                    const hasFoldedPanel = !!(renderMsg.statusPanel || renderMsg.innerMonologue || renderMsg.thinkingText);
                     // 内心卡片只展示本轮实际输出的状态值；旧数据没有 freshStateValues 时回退到合并快照
                     const cardStateValues = msg.freshStateValues ?? msg.stateValues;
                     const isSilentThought = !visibleContent && !renderMsg.mediaType && hasFoldedPanel && msg.role !== "user";
@@ -6112,6 +6119,22 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
                                             <BilingualTextBlock text={msg.displayProjected ? renderMsg.statusPanel : renderDisplayText(renderMsg.statusPanel, 6, false)} mode="markdown" defaultExpanded={session.collapseBilingualTranslation !== false ? false : true} />
                                         )
                                     )}
+                                </div>
+                            )}
+                            {/* Thinking chain card */}
+                            {hasFoldedPanel && expandedMonologueId === msg.id && renderMsg.thinkingText && (
+                                <div className="chat-thinking-card">
+                                    <div className="chat-thinking-header">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                            <circle cx="12" cy="12" r="10"/>
+                                            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+                                            <line x1="12" y1="17" x2="12.01" y2="17"/>
+                                        </svg>
+                                        <span className="chat-thinking-title">思维链</span>
+                                    </div>
+                                    <div className="chat-thinking-body">
+                                        <BilingualTextBlock text={msg.displayProjected ? renderMsg.thinkingText : renderDisplayText(renderMsg.thinkingText, 6, false)} mode="markdown" defaultExpanded={session.collapseBilingualTranslation !== false ? false : true} />
+                                    </div>
                                 </div>
                             )}
                             {/* Inner monologue card (sticky note / journal style) */}

@@ -38,6 +38,7 @@ export interface ParsedAIResponse {
     freshStateValues: StateValue[];
     statusPanel: string;
     innerMonologue: string;
+    thinkingText: string;
 }
 
 // ── Rich-media patterns (non-global, for single match with index) ──
@@ -596,7 +597,9 @@ function parseSegment(segment: string, parts: ParsedMessagePart[]) {
 export function parseAIResponse(rawText: string, previousState: StateValue[]): ParsedAIResponse {
     // 0. FIRST: extract ```html blocks and <style>+HTML before any processing
     const htmlBlockPlaceholders: { placeholder: string; original: string }[] = [];
-    let protected_ = rawText;
+    const thinkingMatch = rawText.match(/<(?:thinking|thought|think)>([\s\S]*?)<\/(?:thinking|thought|think)>/i);
+    const thinkingText = thinkingMatch?.[1]?.trim() || "";
+    let protected_ = thinkingText ? rawText.replace(/<(?:thinking|thought|think)>[\s\S]*?<\/(?:thinking|thought|think)>/gi, "").trim() : rawText;
     // Protect ```html...``` blocks
     protected_ = protected_.replace(/```html\s*\n[\s\S]*?```/g, (match) => {
         const placeholder = `\x00HTML_BLOCK_${htmlBlockPlaceholders.length}\x00`;
@@ -673,5 +676,6 @@ export function parseAIResponse(rawText: string, previousState: StateValue[]): P
         freshStateValues: parsedSV.stateValues,
         statusPanel: restore(status.content),
         innerMonologue: restore(mono.content),
+        thinkingText: thinkingText ? restore(thinkingText) : "",
     };
 }

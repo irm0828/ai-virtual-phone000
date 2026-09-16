@@ -237,6 +237,7 @@ export type ChatMessage = {
     statusRegionMode?: "custom"; // 该消息生成时会话处于自定义状态栏模式（缺省=原生渲染）
     innerMonologue?: string; // AI inner monologue content from [内心] tags
     reasoningText?: string; // 模型思维链（reasoning/CoT）内容，挂在回复批次的第一条气泡上
+    thinkingText?: string; // 模型 thinking 标签内容，用于独立显示思维过程
     stateValues?: StateValue[]; // parsed character state values from inner monologue
     // 本轮回复实际输出的状态值（未合并历史）。undefined = 旧数据（渲染时回退到 stateValues）；
     // [] = 本轮明确没输出（内心卡片不显示状态面板）。stateValues 仍存合并快照供状态链读取。
