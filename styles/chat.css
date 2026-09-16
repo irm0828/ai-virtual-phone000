@@ -6654,6 +6654,9 @@
   color: var(--c-text-title, var(--c-text));
   overflow-wrap: break-word;
 }
+.chat-reasoning-sheet-body .chat-markdown {
+  color: var(--c-text-title, var(--c-text)) !important;
+}
 .chat-reasoning-translation {
   margin-bottom: 14px;
   padding-bottom: 14px;
