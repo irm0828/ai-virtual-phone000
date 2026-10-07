@@ -971,10 +971,58 @@ export function hydrateChatStorage(): Promise<void> {
         const redirectedMessages = redirectMessagesToPreferredSessions(normalizedSessions.redirects);
         const refreshedSessions = refreshSessionPreviewMetadata(normalizedSessions.items);
         normalizedContacts = restoreContactsForPrivateSessions(normalizedContacts.items, normalizedSessions.items);
-        _contactsCache = normalizedContacts.items;
-        _sessionsCache = refreshedSessions.items;
-        if (normalizedContacts.changed) dbReplaceContacts(normalizedContacts.items);
-        if (normalizedSessions.changed || redirectedMessages > 0 || refreshedSessions.changed) dbReplaceSessions(refreshedSessions.items);
+        
+        // Auto-migrate old data: assign first user identity to sessions/messages without userIdentityId
+        const firstIdentity = resolveUserIdentity();
+        const defaultIdentityId = firstIdentity?.id;
+        let migratedSessions = false;
+        let migratedMessages = false;
+        
+        if (defaultIdentityId) {
+            // Migrate sessions
+            const sessionsWithIdentity = refreshedSessions.items.map(s => {
+                if (s.userIdentityId === undefined) {
+                    migratedSessions = true;
+                    return { ...s, userIdentityId: defaultIdentityId };
+                }
+                return s;
+            });
+            _sessionsCache = sessionsWithIdentity;
+            
+            // Migrate messages
+            const messagesWithIdentity = _messagesCache.map(m => {
+                if (m.role === "user" && m.userIdentityId === undefined) {
+                    migratedMessages = true;
+                    return { ...m, userIdentityId: defaultIdentityId };
+                }
+                return m;
+            });
+            _messagesCache = messagesWithIdentity;
+            
+            if (migratedSessions) {
+                console.log("[ChatStorage] Auto-migrated sessions to first user identity");
+                dbReplaceSessions(_sessionsCache);
+            }
+            if (migratedMessages) {
+                console.log("[ChatStorage] Auto-migrated messages to first user identity");
+                dbPutMessages(_messagesCache.filter(m => m.role === "user" && m.userIdentityId === defaultIdentityId));
+            }
+        } else {
+            _contactsCache = normalizedContacts.items;
+            _sessionsCache = refreshedSessions.items;
+        }
+        
+        if (!defaultIdentityId || !migratedSessions) {
+            _contactsCache = normalizedContacts.items;
+            if (normalizedContacts.changed) dbReplaceContacts(normalizedContacts.items);
+            if (!migratedSessions && (normalizedSessions.changed || redirectedMessages > 0 || refreshedSessions.changed)) {
+                dbReplaceSessions(refreshedSessions.items);
+            }
+        } else {
+            _contactsCache = normalizedContacts.items;
+            if (normalizedContacts.changed) dbReplaceContacts(normalizedContacts.items);
+        }
+        
         _hydrated = true;
     }).catch(err => {
         console.warn("[ChatStorage] hydration failed, will retry on next call:", err);
