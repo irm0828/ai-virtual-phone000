@@ -36,6 +36,7 @@ export type ChatContact = {
 export type ChatSession = {
     id: string;
     contactId: string;
+    userIdentityId?: string; // User identity this session belongs to
     lastMessageId?: string;
     lastMessagePreview?: string;
     unreadCount: number;
@@ -1064,9 +1065,12 @@ export function createOrGetSession(contactId: string): ChatSession {
     const existing = sessions.find(s => s.contactId === contactId);
     if (existing) return existing;
 
+    // Get current user identity for the new session
+    const userIdentity = resolveUserIdentity(contactId);
     const newSession: ChatSession = {
         id: `sess_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         contactId,
+        userIdentityId: userIdentity?.id,
         unreadCount: 0,
         updatedAt: new Date().toISOString(),
         isPinned: false,
@@ -1081,9 +1085,12 @@ export function createOrGetSession(contactId: string): ChatSession {
 export function createGroupSession(groupName: string, participantIds: string[], options?: { isSpectator?: boolean }): ChatSession {
     const sessions = loadChatSessions();
     const isSpectator = options?.isSpectator === true;
+    // Get current user identity for the new group session
+    const userIdentity = resolveUserIdentity();
     const newSession: ChatSession = {
         id: `sess_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         contactId: `group_${Date.now()}`, // synthetic contactId for group
+        userIdentityId: userIdentity?.id,
         unreadCount: 0,
         updatedAt: new Date().toISOString(),
         isPinned: false,
