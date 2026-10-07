@@ -194,7 +194,16 @@ export function loadNativeTimeline(
             if (options?.afterTimestamp && msg.createdAt <= options.afterTimestamp) continue;
 
             let sender: string;
-            if (msg.role === "user") sender = userName;
+            if (msg.role === "user") {
+                // For user messages, use the specific user identity name if different from current
+                if (msg.userIdentityId && msg.userIdentityId !== currentIdentityId) {
+                    const allIdentities = loadUserIdentities();
+                    const msgUserIdentity = allIdentities.find(id => id.id === msg.userIdentityId);
+                    sender = msgUserIdentity?.name || userName;
+                } else {
+                    sender = userName;
+                }
+            }
             else if (msg.role === "tool") sender = "工具";
             else if (isSystemInstructionMessage(msg)) sender = "系统指令";
             else if (msg.role === "system") continue; // skip system messages in group timeline
@@ -322,7 +331,21 @@ export function loadNativeTimeline(
                 continue;
             }
 
-            const sender = msg.role === "user" ? userName : msg.role === "tool" ? "工具" : charName;
+            // Resolve sender name: for user messages, use the specific user identity name if different from current
+            let sender: string;
+            if (msg.role === "user") {
+                if (msg.userIdentityId && msg.userIdentityId !== currentIdentityId) {
+                    const allIdentities = loadUserIdentities();
+                    const msgUserIdentity = allIdentities.find(id => id.id === msg.userIdentityId);
+                    sender = msgUserIdentity?.name || userName;
+                } else {
+                    sender = userName;
+                }
+            } else if (msg.role === "tool") {
+                sender = "工具";
+            } else {
+                sender = charName;
+            }
             let content = stripStateAndInnerForPrompt(msg.content || "");
 
             // Action notifications: always override content to bracket format (stored content is natural language for UI)

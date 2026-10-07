@@ -90,6 +90,7 @@ export type NativeToolResultRecord = { toolCallId: string; name: string; content
 export type ChatMessage = {
     id: string;
     sessionId: string;
+    userIdentityId?: string; // User identity when this message was sent (for memory sharing)
     role: ChatMessageRole;
     content: string;
     status: ChatMessageStatus;
@@ -1160,8 +1161,12 @@ export function pushChatMessage(msg: Omit<ChatMessage, "id" | "createdAt" | "sta
     status?: ChatMessageStatus;
     createdAt?: string;
 }): ChatMessage {
+    // Auto-fill userIdentityId if not provided and this is a user message
+    const userIdentityId = msg.userIdentityId || (msg.role === "user" ? resolveUserIdentity()?.id : undefined);
+    
     let newMsg: ChatMessage = {
         ...msg,
+        userIdentityId,
         id: createMessageId(),
         createdAt: msg.createdAt || new Date().toISOString(),
         order: getNextMessageOrder(msg.sessionId),

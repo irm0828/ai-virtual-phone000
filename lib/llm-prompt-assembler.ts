@@ -321,6 +321,48 @@ export function buildUserPersonaText(userIdentity: UserIdentity | null | undefin
     return parts.join("\n");
 }
 
+// ── Helper: collect all user identities from chat history ──
+function collectHistoricalUserIdentities(history: ChatMessage[]): Map<string, UserIdentity> {
+    const identityMap = new Map<string, UserIdentity>();
+    
+    for (const msg of history) {
+        if (msg.role === "user" && msg.userIdentityId) {
+            const identities = typeof window !== "undefined" 
+                ? (window as any).loadUserIdentities?.() ?? []
+                : [];
+            const identity = identities.find((id: UserIdentity) => id.id === msg.userIdentityId);
+            if (identity && !identityMap.has(identity.id)) {
+                identityMap.set(identity.id, identity);
+            }
+        }
+    }
+    
+    return identityMap;
+}
+
+// ── Helper: build historical user identities section ──
+function buildHistoricalUserIdentitiesText(
+    historicalIdentities: Map<string, UserIdentity>,
+    currentUserIdentityId: string | undefined
+): string {
+    const otherIdentities = Array.from(historicalIdentities.values())
+        .filter(id => id.id !== currentUserIdentityId);
+    
+    if (otherIdentities.length === 0) return "";
+    
+    const parts: string[] = ["Historical user identities in this conversation:"];
+    for (const identity of otherIdentities) {
+        const idParts: string[] = [`- ${identity.name}`];
+        if (identity.gender && identity.gender !== "保密") idParts.push(`Gender: ${identity.gender}`);
+        if (identity.age) idParts.push(`Age: ${identity.age}`);
+        if (identity.occupation) idParts.push(`Occupation: ${identity.occupation}`);
+        if (identity.bio) idParts.push(`Bio: ${identity.bio}`);
+        parts.push(idParts.join(", "));
+    }
+    
+    return parts.join("\n");
+}
+
 // ── Helper: determine processing order from prompt_order ──
 function buildProcessingOrder(preset: PresetConfig): Prompt[] {
     if (!preset.prompt_order?.length) return preset.prompts;
@@ -409,6 +451,7 @@ function getMarkerContent(
     regexCtx?: RegexContext,
     characterRelations?: string,
     dwellingContext?: string,
+    historicalUserIdentitiesText?: string,
 ): string | null {
     switch (identifier) {
         case "charDescription":
@@ -416,6 +459,10 @@ function getMarkerContent(
         case "charPersonality":
             return character.personality?.trim() || null;
         case "personaDescription":
+            // Include historical user identities if available
+            if (historicalUserIdentitiesText) {
+                return `${userPersonaText}\n\n${historicalUserIdentitiesText}`;
+            }
             return userPersonaText;
         case "worldInfoBefore": {
             if (wbBeforeEntries.length === 0) return null;
@@ -727,6 +774,14 @@ export function assemblePromptPayload(input: AssemblerInput): LLMMessage[] {
         engine.cocreateWriterNotebook = input.cocreateWriterNotebook ?? "";
 
         const userPersonaText = buildUserPersonaText(userIdentity, resolvedUserName);
+        
+        // Collect historical user identities from chat messages
+        const historicalIdentities = collectHistoricalUserIdentities(history);
+        const historicalUserIdentitiesText = buildHistoricalUserIdentitiesText(
+            historicalIdentities,
+            userIdentity?.id
+        );
+        
         const processingOrder = buildProcessingOrder(preset!);
 
         // Classify WB entries for marker placement
@@ -769,6 +824,7 @@ export function assemblePromptPayload(input: AssemblerInput): LLMMessage[] {
                     regexes, { macroEngine: engine, activeTags },
                     input.characterRelations,
                     input.dwellingContext,
+                    historicalUserIdentitiesText,
                 );
                 if (markerContent) {
                     // Expand macros in marker content ({{char}}/{{user}} in char descriptions etc.)
