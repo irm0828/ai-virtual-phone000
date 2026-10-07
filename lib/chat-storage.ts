@@ -1063,15 +1063,21 @@ export function saveChatSessions(sessions: ChatSession[]) {
 
 export function createOrGetSession(contactId: string): ChatSession {
     const sessions = loadChatSessions();
-    const existing = sessions.find(s => s.contactId === contactId);
+    // Get current user identity
+    const userIdentity = resolveUserIdentity();
+    const currentIdentityId = userIdentity?.id;
+    
+    // Find session matching both contactId AND current user identity
+    const existing = sessions.find(s => 
+        s.contactId === contactId && 
+        s.userIdentityId === currentIdentityId
+    );
     if (existing) return existing;
 
-    // Get current user identity for the new session
-    const userIdentity = resolveUserIdentity(contactId);
     const newSession: ChatSession = {
         id: `sess_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         contactId,
-        userIdentityId: userIdentity?.id,
+        userIdentityId: currentIdentityId,
         unreadCount: 0,
         updatedAt: new Date().toISOString(),
         isPinned: false,

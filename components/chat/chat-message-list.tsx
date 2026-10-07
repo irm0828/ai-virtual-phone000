@@ -145,13 +145,20 @@ export function ChatMessageList({ onCloseApp, activeSession, onSelectSession, on
 
     useEffect(() => {
         const refreshSessions = () => setSessions(loadChatSessions());
+        const refreshIdentity = () => {
+            setIdentity(resolveUserIdentity());
+            setSessions(loadChatSessions());
+            onSelectSession(null); // Close active session when identity changes
+        };
         window.addEventListener("weixin-messages-updated", refreshSessions);
         window.addEventListener("chat-messages-updated", refreshSessions);
+        window.addEventListener("settings-bindings-updated", refreshIdentity);
         return () => {
             window.removeEventListener("weixin-messages-updated", refreshSessions);
             window.removeEventListener("chat-messages-updated", refreshSessions);
+            window.removeEventListener("settings-bindings-updated", refreshIdentity);
         };
-    }, []);
+    }, [onSelectSession]);
 
     // 进列表时检测重复会话（同一角色的单聊 / 同一批成员的群聊），默认全选
     useEffect(() => {
@@ -281,12 +288,15 @@ export function ChatMessageList({ onCloseApp, activeSession, onSelectSession, on
                     {(() => {
                             const contactIds = new Set(loadChatContacts().map(c => c.characterId));
                             const allChars = loadCharacters();
+                            const currentIdentityId = identity?.id;
                             const keyword = listFilter.trim().toLowerCase();
                             const showMascot = mascotSettings.chatEnabled
                                 && listTab !== "group"
                                 && (!keyword || (mascotSettings.nickname || "AI助手").toLowerCase().includes(keyword));
                             const regularItems = [...sessions]
                             .filter(s => {
+                                // Filter by current user identity
+                                if (s.userIdentityId !== currentIdentityId) return false;
                                 if (!(s.isGroup || contactIds.has(s.contactId))) return false;
                                 if (!hasSessionListContent(s.id)) return false;
                                 if (listTab === "private" && s.isGroup) return false;
