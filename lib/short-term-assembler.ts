@@ -9,6 +9,7 @@ import { loadMomentPosts, loadMomentComments } from "./moments-storage";
 import { loadCharacters } from "./character-storage";
 import { resolveUserIdentity } from "./settings-storage";
 import { loadMemoryConfig } from "./memory-storage";
+import { getCurrentUserIdentityId } from "./user-identity-context";
 import type { MemoryConfig } from "./memory-types";
 import { estimateTokens } from "./token-counter";
 import { loadStoryProjectionEntries } from "./story-storage";
@@ -178,9 +179,11 @@ export function loadNativeTimeline(
 
     // ── Chat messages ──
     const sessions = loadChatSessions();
+    const currentIdentityId = getCurrentUserIdentityId();
     // Include direct chat session AND group sessions where this character participates
-    const session = sessions.find(s => !s.isGroup && s.contactId === characterId);
-    const groupSessions = sessions.filter(s => s.isGroup && s.participantIds?.includes(characterId));
+    // Filter by current user identity
+    const session = sessions.find(s => !s.isGroup && s.contactId === characterId && s.userIdentityId === currentIdentityId);
+    const groupSessions = sessions.filter(s => s.isGroup && s.participantIds?.includes(characterId) && s.userIdentityId === currentIdentityId);
 
     // Process group sessions
     for (const gs of groupSessions) {

@@ -99,6 +99,24 @@ export async function loadMemoryEntriesByType(
     return entries.filter(entry => entry.type === type);
 }
 
+/**
+ * Load memory entries for a character, optionally including memories from other user identities.
+ * Used when memorySharing is enabled for the current user identity.
+ */
+export async function loadMemoryEntriesWithSharing(
+    characterId: string,
+    type: MemoryEntry["type"],
+    includeAllIdentities: boolean,
+): Promise<MemoryEntry[]> {
+    if (!includeAllIdentities) {
+        return loadMemoryEntriesByType(characterId, type);
+    }
+    
+    // When sharing is enabled, load all memories for this character across all identities
+    const entries = await loadMemoryEntries(characterId);
+    return entries.filter(entry => entry.type === type);
+}
+
 export async function deleteMemoryEntry(id: string): Promise<void> {
     const db = await openDb();
     if (!db) return;

@@ -16,6 +16,16 @@ export type UserIdentity = {
     age: string;
     occupation: string;
     customSettings: string;
+    memorySharing?: {
+        shortTerm: boolean;          // 短期记忆（近期对话事件）
+        longTerm: boolean;           // 长期记忆（汇总后的历史）
+        core: boolean;               // 核心记忆（关键关系里程碑）
+        tokenLimits?: {
+            shortTermTokens?: number;   // 短期记忆 token 限额
+            longTermTokens?: number;    // 长期记忆 token 限额
+            coreTokens?: number;        // 核心记忆 token 限额
+        };
+    };
 };
 
 const DEFAULT_IDENTITIES: UserIdentity[] = [
@@ -334,6 +344,160 @@ export function UserIdentitySettings() {
                                                 rows={4}
                                                 className="ui-textarea"
                                             />
+                                        </div>
+
+                                        {/* 记忆连通控制 */}
+                                        <div className="flex flex-col gap-3 p-3 rounded-lg bg-[var(--c-page-body-bg)]">
+                                            <div className="flex items-center justify-between">
+                                                <label className="menu-label font-semibold text-sm">记忆连通设置</label>
+                                            </div>
+                                            <div className="menu-desc text-xs px-1">
+                                                控制此身份是否与其他身份共享记忆。连通后，角色会记住所有身份的对话，但仍能区分是哪个身份说的。
+                                            </div>
+
+                                            {/* 短期记忆 */}
+                                            <div className="flex items-center justify-between px-1">
+                                                <div className="flex flex-col gap-0.5">
+                                                    <span className="text-xs font-medium text-[var(--c-text-title)]">短期记忆</span>
+                                                    <span className="menu-desc text-[10px]">近期对话事件（最近几十条消息）</span>
+                                                </div>
+                                                <label className="ui-toggle">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={identity.memorySharing?.shortTerm ?? false}
+                                                        onChange={(e) => updateIdentity(identity.id, {
+                                                            memorySharing: {
+                                                                shortTerm: e.target.checked,
+                                                                longTerm: identity.memorySharing?.longTerm ?? false,
+                                                                core: identity.memorySharing?.core ?? false,
+                                                                tokenLimits: identity.memorySharing?.tokenLimits,
+                                                            }
+                                                        })}
+                                                    />
+                                                    <span className="ui-toggle-slider" />
+                                                </label>
+                                            </div>
+
+                                            {/* 短期记忆 token 限额 */}
+                                            {identity.memorySharing?.shortTerm && (
+                                                <div className="flex items-center gap-2 px-1">
+                                                    <span className="text-[10px] text-[var(--c-text-desc)] shrink-0">Token 限额:</span>
+                                                    <input
+                                                        type="number"
+                                                        value={identity.memorySharing?.tokenLimits?.shortTermTokens ?? 100000}
+                                                        onChange={(e) => updateIdentity(identity.id, {
+                                                            memorySharing: {
+                                                                ...identity.memorySharing,
+                                                                shortTerm: identity.memorySharing?.shortTerm ?? false,
+                                                                longTerm: identity.memorySharing?.longTerm ?? false,
+                                                                core: identity.memorySharing?.core ?? false,
+                                                                tokenLimits: {
+                                                                    ...identity.memorySharing?.tokenLimits,
+                                                                    shortTermTokens: parseInt(e.target.value) || 100000,
+                                                                }
+                                                            }
+                                                        })}
+                                                        placeholder="100000"
+                                                        className="ui-input ts-10 px-2 py-1 flex-1"
+                                                    />
+                                                </div>
+                                            )}
+
+                                            {/* 长期记忆 */}
+                                            <div className="flex items-center justify-between px-1">
+                                                <div className="flex flex-col gap-0.5">
+                                                    <span className="text-xs font-medium text-[var(--c-text-title)]">长期记忆</span>
+                                                    <span className="menu-desc text-[10px]">汇总后的历史事件</span>
+                                                </div>
+                                                <label className="ui-toggle">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={identity.memorySharing?.longTerm ?? false}
+                                                        onChange={(e) => updateIdentity(identity.id, {
+                                                            memorySharing: {
+                                                                shortTerm: identity.memorySharing?.shortTerm ?? false,
+                                                                longTerm: e.target.checked,
+                                                                core: identity.memorySharing?.core ?? false,
+                                                                tokenLimits: identity.memorySharing?.tokenLimits,
+                                                            }
+                                                        })}
+                                                    />
+                                                    <span className="ui-toggle-slider" />
+                                                </label>
+                                            </div>
+
+                                            {/* 长期记忆 token 限额 */}
+                                            {identity.memorySharing?.longTerm && (
+                                                <div className="flex items-center gap-2 px-1">
+                                                    <span className="text-[10px] text-[var(--c-text-desc)] shrink-0">Token 限额:</span>
+                                                    <input
+                                                        type="number"
+                                                        value={identity.memorySharing?.tokenLimits?.longTermTokens ?? 100000}
+                                                        onChange={(e) => updateIdentity(identity.id, {
+                                                            memorySharing: {
+                                                                ...identity.memorySharing,
+                                                                shortTerm: identity.memorySharing?.shortTerm ?? false,
+                                                                longTerm: identity.memorySharing?.longTerm ?? false,
+                                                                core: identity.memorySharing?.core ?? false,
+                                                                tokenLimits: {
+                                                                    ...identity.memorySharing?.tokenLimits,
+                                                                    longTermTokens: parseInt(e.target.value) || 100000,
+                                                                }
+                                                            }
+                                                        })}
+                                                        placeholder="100000"
+                                                        className="ui-input ts-10 px-2 py-1 flex-1"
+                                                    />
+                                                </div>
+                                            )}
+
+                                            {/* 核心记忆 */}
+                                            <div className="flex items-center justify-between px-1">
+                                                <div className="flex flex-col gap-0.5">
+                                                    <span className="text-xs font-medium text-[var(--c-text-title)]">核心记忆</span>
+                                                    <span className="menu-desc text-[10px]">关键关系里程碑（确认关系、重要事件）</span>
+                                                </div>
+                                                <label className="ui-toggle">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={identity.memorySharing?.core ?? false}
+                                                        onChange={(e) => updateIdentity(identity.id, {
+                                                            memorySharing: {
+                                                                shortTerm: identity.memorySharing?.shortTerm ?? false,
+                                                                longTerm: identity.memorySharing?.longTerm ?? false,
+                                                                core: e.target.checked,
+                                                                tokenLimits: identity.memorySharing?.tokenLimits,
+                                                            }
+                                                        })}
+                                                    />
+                                                    <span className="ui-toggle-slider" />
+                                                </label>
+                                            </div>
+
+                                            {/* 核心记忆 token 限额 */}
+                                            {identity.memorySharing?.core && (
+                                                <div className="flex items-center gap-2 px-1">
+                                                    <span className="text-[10px] text-[var(--c-text-desc)] shrink-0">Token 限额:</span>
+                                                    <input
+                                                        type="number"
+                                                        value={identity.memorySharing?.tokenLimits?.coreTokens ?? 100000}
+                                                        onChange={(e) => updateIdentity(identity.id, {
+                                                            memorySharing: {
+                                                                ...identity.memorySharing,
+                                                                shortTerm: identity.memorySharing?.shortTerm ?? false,
+                                                                longTerm: identity.memorySharing?.longTerm ?? false,
+                                                                core: identity.memorySharing?.core ?? false,
+                                                                tokenLimits: {
+                                                                    ...identity.memorySharing?.tokenLimits,
+                                                                    coreTokens: parseInt(e.target.value) || 100000,
+                                                                }
+                                                            }
+                                                        })}
+                                                        placeholder="100000"
+                                                        className="ui-input ts-10 px-2 py-1 flex-1"
+                                                    />
+                                                </div>
+                                            )}
                                         </div>
                                     </>
                                 )

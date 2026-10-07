@@ -2,8 +2,9 @@
 // High-level memory orchestration: retrieve long-term memories for prompt injection.
 
 import type { MemoryConfig, MemoryEntry } from "./memory-types";
-import { loadMemoryEntriesByType } from "./memory-storage";
-import { resolveAuxiliaryApiConfig } from "./settings-storage";
+import { loadMemoryEntriesByType, loadMemoryEntriesWithSharing } from "./memory-storage";
+import { resolveAuxiliaryApiConfig, loadUserIdentities } from "./settings-storage";
+import { getCurrentUserIdentityId } from "./user-identity-context";
 import { generateEmbedding, resolveEmbeddingModel, cosineSimilarity } from "./memory-embedding";
 import { estimateTokens } from "./token-counter";
 
@@ -14,16 +15,25 @@ import { estimateTokens } from "./token-counter";
  *   2. Over budget + embedding API configured → vector-rank, fill until budget
  *   3. Over budget + no embedding → time-sorted (newest first), fill until budget
  * Embedding API is resolved from auxiliary binding (global, not per-character).
+ * Respects user identity memory sharing settings.
  */
 export async function retrieveMemoriesForPrompt(
     characterId: string,
     currentContext: string,
     config: MemoryConfig
 ): Promise<MemoryEntry[]> {
-    const longTermEntries = await loadMemoryEntriesByType(characterId, "long_term");
+    // Check current user identity's memory sharing settings
+    const currentIdentityId = getCurrentUserIdentityId();
+    const identities = loadUserIdentities();
+    const currentIdentity = identities.find(id => id.id === currentIdentityId);
+    
+    const shareLongTerm = currentIdentity?.memorySharing?.longTerm ?? false;
+    const customBudget = currentIdentity?.memorySharing?.tokenLimits?.longTermTokens;
+    
+    const longTermEntries = await loadMemoryEntriesWithSharing(characterId, "long_term", shareLongTerm);
     if (longTermEntries.length === 0 || !currentContext.trim()) return [];
 
-    const budget = config.longTermTokenBudget;
+    const budget = customBudget ?? config.longTermTokenBudget;
 
     // Calculate total tokens for all entries
     let totalTokens = 0;
@@ -64,7 +74,15 @@ export async function retrieveCoreMemoriesForPrompt(
     characterId: string,
     config: MemoryConfig,
 ): Promise<MemoryEntry[]> {
-    const coreEntries = await loadMemoryEntriesByType(characterId, "core");
+    // Check current user identity's memory sharing settings
+    const currentIdentityId = getCurrentUserIdentityId();
+    const identities = loadUserIdentities();
+    const currentIdentity = identities.find(id => id.id === currentIdentityId);
+    
+    const shareCore = currentIdentity?.memorySharing?.core ?? false;
+    const customBudget = currentIdentity?.memorySharing?.tokenLimits?.coreTokens;
+    
+    const coreEntries = await loadMemoryEntriesWithSharing(characterId, "core", shareCore);
     if (coreEntries.length === 0) return [];
 
     const sorted = [...coreEntries].sort((a, b) => {
@@ -76,7 +94,7 @@ export async function retrieveCoreMemoriesForPrompt(
         return bDate.localeCompare(aDate);
     });
 
-    return fillByBudget(sorted, config.coreMemoryTokenBudget);
+    return fillByBudget(sorted, customBudget ?? config.coreMemoryTokenBudget);
 }
 
 /** Pick entries in order until token budget is exhausted. */
