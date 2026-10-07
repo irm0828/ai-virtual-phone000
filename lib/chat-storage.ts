@@ -29,6 +29,7 @@ export function normalizeVisionImagePromptLimit(value: unknown): number {
 export type ChatContact = {
     id: string; // unique contact id
     characterId: string; // links to global character in character-storage.ts
+    userIdentityId?: string; // User identity this contact belongs to
     nickname?: string;
     addedAt: string; // ISO date
 };
@@ -972,13 +973,24 @@ export function hydrateChatStorage(): Promise<void> {
         const refreshedSessions = refreshSessionPreviewMetadata(normalizedSessions.items);
         normalizedContacts = restoreContactsForPrivateSessions(normalizedContacts.items, normalizedSessions.items);
         
-        // Auto-migrate old data: assign first user identity to sessions/messages without userIdentityId
+        // Auto-migrate old data: assign first user identity to contacts/sessions/messages without userIdentityId
         const firstIdentity = resolveUserIdentity();
         const defaultIdentityId = firstIdentity?.id;
+        let migratedContacts = false;
         let migratedSessions = false;
         let migratedMessages = false;
         
         if (defaultIdentityId) {
+            // Migrate contacts
+            const contactsWithIdentity = normalizedContacts.items.map(c => {
+                if (c.userIdentityId === undefined) {
+                    migratedContacts = true;
+                    return { ...c, userIdentityId: defaultIdentityId };
+                }
+                return c;
+            });
+            _contactsCache = contactsWithIdentity;
+            
             // Migrate sessions
             const sessionsWithIdentity = refreshedSessions.items.map(s => {
                 if (s.userIdentityId === undefined) {
@@ -999,6 +1011,10 @@ export function hydrateChatStorage(): Promise<void> {
             });
             _messagesCache = messagesWithIdentity;
             
+            if (migratedContacts) {
+                console.log("[ChatStorage] Auto-migrated contacts to first user identity");
+                dbReplaceContacts(_contactsCache);
+            }
             if (migratedSessions) {
                 console.log("[ChatStorage] Auto-migrated sessions to first user identity");
                 dbReplaceSessions(_sessionsCache);
@@ -1012,15 +1028,11 @@ export function hydrateChatStorage(): Promise<void> {
             _sessionsCache = refreshedSessions.items;
         }
         
-        if (!defaultIdentityId || !migratedSessions) {
-            _contactsCache = normalizedContacts.items;
+        if (!defaultIdentityId) {
             if (normalizedContacts.changed) dbReplaceContacts(normalizedContacts.items);
-            if (!migratedSessions && (normalizedSessions.changed || redirectedMessages > 0 || refreshedSessions.changed)) {
+            if (normalizedSessions.changed || redirectedMessages > 0 || refreshedSessions.changed) {
                 dbReplaceSessions(refreshedSessions.items);
             }
-        } else {
-            _contactsCache = normalizedContacts.items;
-            if (normalizedContacts.changed) dbReplaceContacts(normalizedContacts.items);
         }
         
         _hydrated = true;
@@ -1047,6 +1059,12 @@ export function loadChatContacts(): ChatContact[] {
         _contactsCache = normalized.items;
         if (_hydrated && typeof window !== "undefined") dbReplaceContacts(normalized.items);
     }
+    
+    // Filter contacts by current user identity
+    const currentIdentity = resolveUserIdentity();
+    if (currentIdentity) {
+        return _contactsCache.filter(c => c.userIdentityId === currentIdentity.id);
+    }
     return _contactsCache;
 }
 
@@ -1068,9 +1086,11 @@ export function addChatContact(characterId: string): ChatContact | null {
     const contacts = loadChatContacts();
     if (contacts.find(c => c.characterId === characterId)) return null; // already exists
 
+    const currentIdentity = resolveUserIdentity();
     const newContact: ChatContact = {
         id: `contact_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         characterId,
+        userIdentityId: currentIdentity?.id,
         addedAt: new Date().toISOString()
     };
     saveChatContacts([...contacts, newContact]);
@@ -1091,6 +1111,12 @@ export function loadChatSessions(): ChatSession[] {
     if (normalized.changed || redirectedMessages > 0 || refreshed.changed) {
         _sessionsCache = refreshed.items;
         if (_hydrated && typeof window !== "undefined") dbReplaceSessions(refreshed.items);
+    }
+    
+    // Filter sessions by current user identity
+    const currentIdentity = resolveUserIdentity();
+    if (currentIdentity) {
+        return _sessionsCache.filter(s => s.userIdentityId === currentIdentity.id);
     }
     return _sessionsCache;
 }
