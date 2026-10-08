@@ -85,18 +85,24 @@ export async function loadMemoryEntries(characterId: string, identityId = getCur
             const allEntries: MemoryEntry[] = await runRequest(tx.objectStore(STORE_NAME).getAll());
             entries = allEntries.filter(entry => entry.characterId === characterId);
         }
+        const legacyOwnerKey = "ai_phone_memory_legacy_identity_owner_v1";
+        let legacyOwnerId = kvGet(legacyOwnerKey);
+        if (!legacyOwnerId) {
+            legacyOwnerId = getCurrentGlobalIdentityId();
+            kvSet(legacyOwnerKey, legacyOwnerId);
+        }
         const legacyEntries = entries.filter(entry => !entry.identityId);
         if (legacyEntries.length > 0) {
-            entries = entries.map(entry => entry.identityId ? entry : { ...entry, identityId });
             try {
                 const writeTx = db.transaction(STORE_NAME, "readwrite");
-                for (const entry of legacyEntries) writeTx.objectStore(STORE_NAME).put({ ...entry, identityId });
+                for (const entry of legacyEntries) writeTx.objectStore(STORE_NAME).put({ ...entry, identityId: legacyOwnerId! });
                 await new Promise<void>((resolve, reject) => {
                     writeTx.oncomplete = () => resolve();
                     writeTx.onerror = () => reject(writeTx.error);
                 });
             } catch { /* legacy memory migration is best effort */ }
         }
+        entries = entries.map(entry => entry.identityId ? entry : { ...entry, identityId: legacyOwnerId! });
         entries = entries.filter(entry => entry.identityId === identityId);
         entries.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
         return entries;

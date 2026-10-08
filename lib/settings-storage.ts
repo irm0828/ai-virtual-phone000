@@ -1147,9 +1147,15 @@ export function saveUserIdentities(identities: UserIdentity[]): void {
     const normalized = identities.map(identity => ({ ...identity }));
     const byId = new Map(normalized.map(identity => [identity.id, identity]));
     for (const identity of normalized) {
+        const original = identities.find(item => item.id === identity.id) as (UserIdentity & { worldLink?: { identityId: string; mode: "none" | "same_world" } }) | undefined;
+        const oldTargetId = original?.worldLink?.mode === "same_world" ? original.worldLink.identityId : "";
         const link = identity.worldLink;
         if (!link || link.mode !== "same_world" || !byId.has(link.identityId) || link.identityId === identity.id) {
             identity.worldLink = { identityId: "", mode: "none" };
+            if (oldTargetId) {
+                const oldTarget = byId.get(oldTargetId);
+                if (oldTarget?.worldLink?.identityId === identity.id) oldTarget.worldLink = { identityId: "", mode: "none" };
+            }
             continue;
         }
         const target = byId.get(link.identityId)!;
@@ -1159,8 +1165,13 @@ export function saveUserIdentities(identities: UserIdentity[]): void {
             relationToTarget: link.relationToSource,
             relationToSource: link.relationToTarget,
         };
+        if (oldTargetId && oldTargetId !== link.identityId) {
+            const oldTarget = byId.get(oldTargetId);
+            if (oldTarget?.worldLink?.identityId === identity.id) oldTarget.worldLink = { identityId: "", mode: "none" };
+        }
     }
     kvSet(USER_IDENTITIES_KEY, JSON.stringify(normalized));
+    window.dispatchEvent(new CustomEvent("user-identities-updated"));
 }
 
 /**

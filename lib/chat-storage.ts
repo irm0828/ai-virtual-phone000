@@ -573,6 +573,8 @@ let _sessionsCache: ChatSession[] = [];
 let _messagesCache: ChatMessage[] = [];
 let _hydrated = false;
 let _hydratedIdentityId: string | null = null;
+let _cacheIdentityId: string | null = null;
+let _hydrateGeneration = 0;
 let _hydratePromise: Promise<void> | null = null;
 
 type NormalizedList<T> = { items: T[]; changed: boolean };
@@ -970,19 +972,32 @@ function refreshSessionPreviewMetadata(sessions: ChatSession[]): NormalizedList<
  */
 export function hydrateChatStorage(): Promise<void> {
     const requestedIdentityId = currentIdentityId();
+    if (_cacheIdentityId !== requestedIdentityId) resetChatStorageForIdentity();
     if (_hydrated && _hydratedIdentityId !== requestedIdentityId) resetChatStorageForIdentity();
     if (_hydrated || typeof window === "undefined") return Promise.resolve();
     if (_hydratePromise) return _hydratePromise;
+    const generation = _hydrateGeneration;
+    _cacheIdentityId = requestedIdentityId;
     _hydratePromise = initChatDb().then(data => {
         const identityId = currentIdentityId();
-        const hasIdentityPartition = data.sessions.some(session => Boolean(session.identityId)) || data.contacts.some(contact => Boolean(contact.identityId));
+        if (generation !== _hydrateGeneration || identityId !== requestedIdentityId) return;
+        const legacyOwnerKey = "ai_phone_chat_legacy_identity_owner_v1";
+        let legacyOwnerId = kvGet(legacyOwnerKey);
+        if (!legacyOwnerId) {
+            legacyOwnerId = identityId;
+            kvSet(legacyOwnerKey, identityId);
+        }
         const scopedSessions = data.sessions
-            .filter(session => isCurrentIdentity(session) || (!hasIdentityPartition && !session.identityId))
-            .map(session => session.identityId ? session : { ...session, identityId });
+            .filter(session => (session.identityId || legacyOwnerId) === identityId)
+            .map(session => session.identityId ? session : { ...session, identityId: legacyOwnerId! });
         const scopedSessionIds = new Set(scopedSessions.map(session => session.id));
         const scopedContacts = data.contacts
-            .filter(contact => isCurrentIdentity(contact) || (!hasIdentityPartition && !contact.identityId))
-            .map(contact => contact.identityId ? contact : { ...contact, identityId });
+            .filter(contact => (contact.identityId || legacyOwnerId) === identityId)
+            .map(contact => contact.identityId ? contact : { ...contact, identityId: legacyOwnerId! });
+        const untaggedSessions = data.sessions.filter(session => !session.identityId).map(session => ({ ...session, identityId: legacyOwnerId! }));
+        const untaggedContacts = data.contacts.filter(contact => !contact.identityId).map(contact => ({ ...contact, identityId: legacyOwnerId! }));
+        if (untaggedSessions.length) dbPutSessions(untaggedSessions);
+        if (untaggedContacts.length) dbPutContacts(untaggedContacts);
         const normalizedToolHistory = normalizeLegacyTextToolHistory(
             data.messages.filter(message => scopedSessionIds.has(message.sessionId)),
         );
@@ -1029,9 +1044,11 @@ function isCurrentIdentity(value: { identityId?: string }): boolean {
 }
 
 export function resetChatStorageForIdentity(): void {
+    _hydrateGeneration += 1;
     _contactsCache = [];
     _sessionsCache = [];
     _messagesCache = [];
+    _cacheIdentityId = null;
     _hydrated = false;
     _hydratedIdentityId = null;
     _hydratePromise = null;
@@ -1039,6 +1056,7 @@ export function resetChatStorageForIdentity(): void {
 
 // ── CRUD for Contacts ─────────────────────────
 export function loadChatContacts(): ChatContact[] {
+    if (_cacheIdentityId !== currentIdentityId()) resetChatStorageForIdentity();
     _contactsCache = _contactsCache.filter(isCurrentIdentity);
     let normalized = normalizeChatContacts(_contactsCache);
     normalized = restoreContactsForPrivateSessions(normalized.items, _sessionsCache);
@@ -1058,7 +1076,7 @@ export function saveChatContacts(contacts: ChatContact[]) {
         dbPutContacts(normalized.items);
         return;
     }
-    dbReplaceContacts(normalized.items);
+    dbReplaceContactsForIdentity(identityId, normalized.items);
 }
 
 export function addChatContact(characterId: string): ChatContact | null {
@@ -1086,6 +1104,7 @@ export function removeChatContact(characterId: string) {
 
 // ── CRUD for Sessions ─────────────────────────
 export function loadChatSessions(): ChatSession[] {
+    if (_cacheIdentityId !== currentIdentityId()) resetChatStorageForIdentity();
     _sessionsCache = _sessionsCache.filter(isCurrentIdentity);
     const normalized = normalizeChatSessions(_sessionsCache);
     const redirectedMessages = redirectMessagesToPreferredSessions(normalized.redirects);
@@ -1183,6 +1202,9 @@ export function reassignChatSessionMessages(fromSessionId: string, toSessionId: 
 
 // ── CRUD for Messages ─────────────────────────
 export function loadChatMessages(sessionId: string, limit?: number): ChatMessage[] {
+    if (_cacheIdentityId !== currentIdentityId()) resetChatStorageForIdentity();
+    const session = _sessionsCache.find(item => item.id === sessionId);
+    if (!session || session.identityId !== currentIdentityId()) return [];
     const all = getSortedSessionMessages(sessionId);
     if (limit && limit < all.length) return all.slice(-limit);
     return all;
@@ -1218,6 +1240,11 @@ export function pushChatMessage(msg: Omit<ChatMessage, "id" | "createdAt" | "sta
     status?: ChatMessageStatus;
     createdAt?: string;
 }): ChatMessage {
+    if (_cacheIdentityId !== currentIdentityId()) resetChatStorageForIdentity();
+    const owner = _sessionsCache.find(session => session.id === msg.sessionId);
+    if (!owner || owner.identityId !== currentIdentityId()) {
+        throw new Error("拒绝向非当前身份的聊天会话写入消息。");
+    }
     let newMsg: ChatMessage = {
         ...msg,
         id: createMessageId(),
@@ -1493,6 +1520,7 @@ function expandToolExecutionDeleteSet(messages: ChatMessage[]): ChatMessage[] {
 }
 
 export function deleteChatMessage(messageId: string) {
+    if (_cacheIdentityId !== currentIdentityId()) resetChatStorageForIdentity();
     const targetMsg = _messagesCache.find(m => m.id === messageId);
     if (!targetMsg) return;
     const sessionId = targetMsg.sessionId;
@@ -1525,6 +1553,7 @@ export function deleteChatMessage(messageId: string) {
 
 /** Delete a message and all messages after it in the same session. */
 export function deleteChatMessagesFrom(messageId: string) {
+    if (_cacheIdentityId !== currentIdentityId()) resetChatStorageForIdentity();
     const targetMsg = _messagesCache.find(m => m.id === messageId);
     if (!targetMsg) return;
     const sessionId = targetMsg.sessionId;

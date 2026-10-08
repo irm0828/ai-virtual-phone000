@@ -3,6 +3,7 @@
 
 import type { ChatSession, ChatMessage } from "./chat-storage";
 import type { LLMContentPart } from "./llm-prompt-assembler";
+import { getCurrentGlobalIdentityId } from "./user-world";
 
 export type DebugChatState = { session: ChatSession; messages: ChatMessage[] } | null;
 export type DebugPromptSnapshot = {
@@ -19,6 +20,7 @@ export type DebugPromptSnapshot = {
     presetName?: string;
     messages: { role: string; content: string | LLMContentPart[]; marker?: string }[];
     tools?: { name: string; description?: string }[];
+    identityId?: string;
 };
 
 let _state: DebugChatState = null;
@@ -26,8 +28,22 @@ const _listeners = new Set<() => void>();
 let _promptSnapshot: DebugPromptSnapshot | null = null;
 const _promptListeners = new Set<() => void>();
 
+if (typeof window !== "undefined") {
+    window.addEventListener("user-identity-changed", () => {
+        _state = null;
+        _promptSnapshot = null;
+        _listeners.forEach(fn => fn());
+        _promptListeners.forEach(fn => fn());
+    });
+}
+
 export function setDebugChatState(s: DebugChatState): void {
     _state = s;
+    _listeners.forEach(fn => fn());
+}
+
+export function clearDebugChatState(): void {
+    _state = null;
     _listeners.forEach(fn => fn());
 }
 
@@ -41,12 +57,18 @@ export function subscribeDebugChatState(fn: () => void): () => void {
 }
 
 export function setDebugPromptSnapshot(snapshot: DebugPromptSnapshot): void {
-    _promptSnapshot = snapshot;
+    _promptSnapshot = { ...snapshot, identityId: snapshot.identityId || getCurrentGlobalIdentityId() };
     _promptListeners.forEach(fn => fn());
 }
 
 export function getDebugPromptSnapshot(): DebugPromptSnapshot | null {
-    return _promptSnapshot;
+    if (!_promptSnapshot) return null;
+    return _promptSnapshot.identityId === getCurrentGlobalIdentityId() ? _promptSnapshot : null;
+}
+
+export function clearDebugPromptSnapshot(): void {
+    _promptSnapshot = null;
+    _promptListeners.forEach(fn => fn());
 }
 
 export function subscribeDebugPromptSnapshot(fn: () => void): () => void {

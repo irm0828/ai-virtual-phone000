@@ -398,7 +398,11 @@ export function ChatSettingsPanel({
     const [streamOnline, setStreamOnline] = useState(session.streamOnline === true);
     const [streamOffline, setStreamOffline] = useState(session.streamOffline === true);
     const linkedUsers = getLinkedUserIdentities(getCurrentGlobalIdentityId());
-    const [memorySync, setMemorySync] = useState(session.memorySync || { enabled: false, depth: 10, sources: {} });
+    const [memorySync, setMemorySync] = useState(() => ({
+        enabled: session.memorySync?.enabled === true,
+        depth: Math.max(1, Math.min(100, Number(session.memorySync?.depth) || 10)),
+        sources: session.memorySync?.sources || {},
+    }));
     const defaultBilingualPrompt = session.isGroup ? DEFAULT_GROUP_CHAT_BILINGUAL_PROMPT : DEFAULT_CHAT_BILINGUAL_PROMPT;
     const defaultOfflineBilingualPrompt = session.isGroup ? DEFAULT_GROUP_OFFLINE_CHAT_BILINGUAL_PROMPT : DEFAULT_OFFLINE_CHAT_BILINGUAL_PROMPT;
     const [bilingualTranslationPrompt, setBilingualTranslationPrompt] = useState(session.bilingualTranslationPrompt || defaultBilingualPrompt);
@@ -1086,7 +1090,13 @@ export function ChatSettingsPanel({
                                     <span className="menu-label">跨对话记忆同步</span>
                                     <span className="menu-desc">仅同步已连接为同一世界的其他用户记忆</span>
                                     <div className="flex flex-col gap-2 mt-2">
-                                        <Toggle checked={memorySync.enabled} onChange={checked => { const next = { ...memorySync, enabled: checked }; setMemorySync(next); updateSession({ memorySync: next }); }} />
+                                        <Toggle checked={memorySync.enabled} onChange={checked => {
+                                            const sources = { ...memorySync.sources };
+                                            if (checked) linkedUsers.forEach(user => { if (!sources[user.id]) sources[user.id] = { shortTerm: false, longTerm: true, core: true }; });
+                                            const next = { ...memorySync, enabled: checked, sources };
+                                            setMemorySync(next);
+                                            updateSession({ memorySync: next });
+                                        }} />
                                         {memorySync.enabled && <>
                                             <label className="menu-desc">同步深度（条数）</label>
                                             <input className="ui-input h-8 w-20" type="number" min={1} max={100} value={memorySync.depth} onChange={event => { const next = { ...memorySync, depth: Math.max(1, Math.min(100, Number(event.target.value) || 1)) }; setMemorySync(next); updateSession({ memorySync: next }); }} />

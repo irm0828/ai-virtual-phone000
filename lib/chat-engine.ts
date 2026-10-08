@@ -1862,7 +1862,11 @@ export async function buildChatPromptMessages(
         }
     }
 
-    const memorySync = session.memorySync;
+    const memorySync = session.memorySync ? {
+        ...session.memorySync,
+        sources: session.memorySync.sources || {},
+        depth: Math.max(1, Math.min(100, Number(session.memorySync.depth) || 10)),
+    } : undefined;
     const linkedIds = memorySync?.enabled
         ? getLinkedUserIdentities(getCurrentGlobalIdentityId())
             .filter(identity => {

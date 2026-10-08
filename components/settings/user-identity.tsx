@@ -89,6 +89,12 @@ export function UserIdentitySettings() {
         saveUserIdentities(next);
     }, []);
 
+    useEffect(() => {
+        const onIdentitiesUpdated = () => setIdentitiesRaw(loadUserIdentities());
+        window.addEventListener("user-identities-updated", onIdentitiesUpdated);
+        return () => window.removeEventListener("user-identities-updated", onIdentitiesUpdated);
+    }, []);
+
     const addIdentity = useCallback(() => {
         const newIdentity: UserIdentity = {
             id: `identity-${Date.now()}`,
@@ -119,7 +125,31 @@ export function UserIdentitySettings() {
     }, [addIdentity, setSubpageRightAction]);
 
     const updateIdentity = (id: string, updates: Partial<UserIdentity>) => {
-        setIdentities(identities.map(i => i.id === id ? { ...i, ...updates } : i));
+        let next = identities.map(identity => identity.id === id ? { ...identity, ...updates } : identity);
+        if (updates.worldLink) {
+            const targetId = updates.worldLink.mode === "same_world" ? updates.worldLink.identityId : "";
+            const previousTargetId = identities.find(identity => identity.id === id)?.worldLink?.identityId;
+            next = next.map(identity => {
+                if (identity.id === id) return identity;
+                if (identity.id === previousTargetId && previousTargetId !== targetId) {
+                    return { ...identity, worldLink: { identityId: "", mode: "none" } };
+                }
+                if (identity.id === targetId) {
+                    const source = next.find(item => item.id === id)!;
+                    return {
+                        ...identity,
+                        worldLink: {
+                            identityId: id,
+                            mode: "same_world",
+                            relationToTarget: source.worldLink?.relationToSource,
+                            relationToSource: source.worldLink?.relationToTarget,
+                        },
+                    };
+                }
+                return identity;
+            });
+        }
+        setIdentities(next);
     };
 
     const removeIdentity = (id: string) => {

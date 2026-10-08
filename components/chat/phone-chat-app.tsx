@@ -10,6 +10,7 @@ import { UserProfilePanel } from "./user-profile-panel";
 import { MessageCircle, Users, Aperture, UserRound } from "lucide-react";
 import { ChatSession, loadChatSessions, pushChatMessage, hydrateChatStorage, resetChatStorageForIdentity } from "@/lib/chat-storage";
 import { USER_IDENTITY_CHANGED_EVENT } from "@/lib/settings-storage";
+import { clearDebugPromptSnapshot, clearDebugChatState } from "@/lib/debug-store";
 import { notifyMascotPageContext } from "@/lib/mascot-events";
 import { loadCharacters } from "@/lib/character-storage";
 import { SessionCustomCSS } from "@/components/ui/session-custom-css";
@@ -45,7 +46,12 @@ export const PhoneChatApp = memo(function PhoneChatApp({ onClose, initialSession
     useEffect(() => {
         const handleIdentityChange = () => {
             resetChatStorageForIdentity();
+            clearDebugPromptSnapshot();
+            clearDebugChatState();
             setActiveSession(null);
+            setActiveMascot(false);
+            setActiveTab("messages");
+            setPendingAddContactId(null);
             setVisitedSessions(new Map());
             setDbReady(false);
             void hydrateChatStorage().then(() => setDbReady(true));
@@ -313,7 +319,7 @@ export const PhoneChatApp = memo(function PhoneChatApp({ onClose, initialSession
 
             {/* Chat Rooms — all visited sessions stay mounted, only active one is visible */}
             {[...visitedSessions.values()].map(sess => (
-                <div key={sess.id} style={{ display: activeSession?.id === sess.id ? undefined : 'none' }} className="chat-room-layer absolute inset-0">
+                <div key={`${sess.identityId || "legacy"}:${sess.id}`} style={{ display: activeSession?.id === sess.id ? undefined : 'none' }} className="chat-room-layer absolute inset-0">
                     <ChatRoom
                         session={sess}
                         onBack={() => setActiveSession(null)}
