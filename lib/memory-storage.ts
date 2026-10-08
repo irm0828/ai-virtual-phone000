@@ -5,6 +5,7 @@ import type { MemoryEntry, MemoryConfig } from "./memory-types";
 import { DEFAULT_MEMORY_CONFIG } from "./memory-types";
 import { kvGet, kvSet, registerKvMigration, registerDynamicPrefix } from "./kv-db";
 import { openIndexedDbAtLeast } from "./idb-open";
+import { getCurrentGlobalIdentityId } from "./user-world";
 
 // ── Long-term memory DB (unchanged from v1) ──
 
@@ -59,7 +60,7 @@ export async function saveMemoryEntry(entry: MemoryEntry): Promise<void> {
     if (!db) return;
     try {
         const tx = db.transaction(STORE_NAME, "readwrite");
-        tx.objectStore(STORE_NAME).put(entry);
+        tx.objectStore(STORE_NAME).put({ ...entry, identityId: entry.identityId || getCurrentGlobalIdentityId() });
         await new Promise<void>((res, rej) => {
             tx.oncomplete = () => res();
             tx.onerror = () => rej(tx.error);
@@ -69,7 +70,7 @@ export async function saveMemoryEntry(entry: MemoryEntry): Promise<void> {
     }
 }
 
-export async function loadMemoryEntries(characterId: string): Promise<MemoryEntry[]> {
+export async function loadMemoryEntries(characterId: string, identityId = getCurrentGlobalIdentityId()): Promise<MemoryEntry[]> {
     const db = await openDb();
     if (!db) return [];
     try {
@@ -84,6 +85,19 @@ export async function loadMemoryEntries(characterId: string): Promise<MemoryEntr
             const allEntries: MemoryEntry[] = await runRequest(tx.objectStore(STORE_NAME).getAll());
             entries = allEntries.filter(entry => entry.characterId === characterId);
         }
+        const legacyEntries = entries.filter(entry => !entry.identityId);
+        if (legacyEntries.length > 0) {
+            entries = entries.map(entry => entry.identityId ? entry : { ...entry, identityId });
+            try {
+                const writeTx = db.transaction(STORE_NAME, "readwrite");
+                for (const entry of legacyEntries) writeTx.objectStore(STORE_NAME).put({ ...entry, identityId });
+                await new Promise<void>((resolve, reject) => {
+                    writeTx.oncomplete = () => resolve();
+                    writeTx.onerror = () => reject(writeTx.error);
+                });
+            } catch { /* legacy memory migration is best effort */ }
+        }
+        entries = entries.filter(entry => entry.identityId === identityId);
         entries.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
         return entries;
     } finally {
@@ -94,8 +108,9 @@ export async function loadMemoryEntries(characterId: string): Promise<MemoryEntr
 export async function loadMemoryEntriesByType(
     characterId: string,
     type: MemoryEntry["type"],
+    identityId = getCurrentGlobalIdentityId(),
 ): Promise<MemoryEntry[]> {
-    const entries = await loadMemoryEntries(characterId);
+    const entries = await loadMemoryEntries(characterId, identityId);
     return entries.filter(entry => entry.type === type);
 }
 

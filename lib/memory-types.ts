@@ -5,6 +5,8 @@ import type { ContentAppId } from "./settings-types";
 export type MemoryEntry = {
     id: string;
     characterId: string;
+    /** 记忆所属用户身份；旧数据缺省时兼容为当前身份。 */
+    identityId?: string;
     sourceApp: ContentAppId;
     type: "long_term" | "core";
     content: string;

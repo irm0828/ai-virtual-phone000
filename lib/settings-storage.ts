@@ -857,10 +857,18 @@ export function loadBindingConfig(): BindingConfig {
     }
 }
 
+export const USER_IDENTITY_CHANGED_EVENT = "user-identity-changed";
+
 export function saveBindingConfig(config: BindingConfig, notify: boolean = true): void {
     if (typeof window === "undefined") return;
+    const previous = loadBindingConfig();
     kvSet(BINDINGS_KEY, JSON.stringify(config));
     if (notify) window.dispatchEvent(new CustomEvent("settings-bindings-updated"));
+    if (previous.globalDefaults.userIdentityId !== config.globalDefaults.userIdentityId) {
+        window.dispatchEvent(new CustomEvent(USER_IDENTITY_CHANGED_EVENT, {
+            detail: { identityId: config.globalDefaults.userIdentityId },
+        }));
+    }
 }
 
 /**
@@ -1136,7 +1144,23 @@ export function loadUserIdentities(): UserIdentity[] {
 
 export function saveUserIdentities(identities: UserIdentity[]): void {
     if (typeof window === "undefined") return;
-    kvSet(USER_IDENTITIES_KEY, JSON.stringify(identities));
+    const normalized = identities.map(identity => ({ ...identity }));
+    const byId = new Map(normalized.map(identity => [identity.id, identity]));
+    for (const identity of normalized) {
+        const link = identity.worldLink;
+        if (!link || link.mode !== "same_world" || !byId.has(link.identityId) || link.identityId === identity.id) {
+            identity.worldLink = { identityId: "", mode: "none" };
+            continue;
+        }
+        const target = byId.get(link.identityId)!;
+        target.worldLink = {
+            identityId: identity.id,
+            mode: "same_world",
+            relationToTarget: link.relationToSource,
+            relationToSource: link.relationToTarget,
+        };
+    }
+    kvSet(USER_IDENTITIES_KEY, JSON.stringify(normalized));
 }
 
 /**

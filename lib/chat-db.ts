@@ -19,6 +19,11 @@ class ChatDatabase extends Dexie {
             sessions: "id, contactId",
             contacts: "id, characterId",
         });
+        this.version(2).stores({
+            messages: "id, sessionId, createdAt",
+            sessions: "id, contactId, identityId",
+            contacts: "id, characterId, identityId",
+        });
     }
 }
 
@@ -178,6 +183,13 @@ export function dbReplaceSessions(sessions: ChatSession[]): void {
     }).catch(err => console.warn("[ChatDB] replace sessions failed:", err));
 }
 
+export function dbReplaceSessionsForIdentity(identityId: string, sessions: ChatSession[]): void {
+    chatDb.transaction("rw", chatDb.sessions, async () => {
+        await chatDb.sessions.where("identityId").equals(identityId).delete();
+        await chatDb.sessions.bulkPut(sessions);
+    }).catch(err => console.warn("[ChatDB] replace identity sessions failed:", err));
+}
+
 export function dbDeleteSession(id: string): void {
     chatDb.sessions.delete(id).catch(err => console.warn("[ChatDB] delete session failed:", err));
 }
@@ -195,4 +207,11 @@ export function dbReplaceContacts(contacts: ChatContact[]): void {
         await chatDb.contacts.clear();
         await chatDb.contacts.bulkPut(contacts);
     }).catch(err => console.warn("[ChatDB] replaceContacts failed:", err));
+}
+
+export function dbReplaceContactsForIdentity(identityId: string, contacts: ChatContact[]): void {
+    chatDb.transaction("rw", chatDb.contacts, async () => {
+        await chatDb.contacts.where("identityId").equals(identityId).delete();
+        await chatDb.contacts.bulkPut(contacts);
+    }).catch(err => console.warn("[ChatDB] replace identity contacts failed:", err));
 }

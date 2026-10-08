@@ -5,7 +5,8 @@ import {
     initChatDb,
     dbPutMessage, dbDeleteMessage, dbDeleteMessagesBySession, dbDeleteMessagesByIds,
     dbPutMessages, dbPutSessions, dbPutContacts, dbDeleteSession,
-    dbReplaceContacts, dbReplaceSessions,
+    dbReplaceContacts, dbReplaceContactsForIdentity,
+    dbReplaceSessions, dbReplaceSessionsForIdentity,
 } from "./chat-db";
 import { resolveUserIdentity } from "./settings-storage";
 import { loadCharacters } from "./character-storage";
@@ -13,6 +14,7 @@ import { kvGet, kvSet, registerKvMigration } from "./kv-db";
 import { emitChatPluginEvent, runChatPluginTransformSync } from "./chat-plugin-hooks";
 import { parseAIResponse } from "./rich-message-parser";
 import { extractTextToolDirectiveText } from "./text-tool-protocol";
+import { getCurrentGlobalIdentityId } from "./user-world";
 
 export const DEFAULT_VISION_IMAGE_PROMPT_LIMIT = 1;
 export const MAX_VISION_IMAGE_PROMPT_LIMIT = 20;
@@ -28,6 +30,8 @@ export function normalizeVisionImagePromptLimit(value: unknown): number {
 
 export type ChatContact = {
     id: string; // unique contact id
+    /** 身份分区；旧数据缺省时迁移到首次打开时的当前身份。 */
+    identityId?: string;
     characterId: string; // links to global character in character-storage.ts
     nickname?: string;
     addedAt: string; // ISO date
@@ -35,6 +39,8 @@ export type ChatContact = {
 
 export type ChatSession = {
     id: string;
+    /** 身份分区；同一角色在不同身份下拥有不同会话。 */
+    identityId?: string;
     contactId: string;
     lastMessageId?: string;
     lastMessagePreview?: string;
@@ -66,6 +72,12 @@ export type ChatSession = {
      * 关掉就只调一次 API，那一轮没摘要（不进短期记忆的事件流）。按次计费的接口想省一半调用时关它。
      */
     offlineSummaryRetry?: boolean;
+    /** 跨用户记忆同步，仅同世界身份且显式开启时生效。 */
+    memorySync?: {
+        enabled: boolean;
+        depth: number;
+        sources: Record<string, { shortTerm: boolean; longTerm: boolean; core: boolean }>;
+    };
     // Group chat fields
     isGroup?: boolean;
     groupName?: string;
@@ -560,6 +572,7 @@ let _contactsCache: ChatContact[] = [];
 let _sessionsCache: ChatSession[] = [];
 let _messagesCache: ChatMessage[] = [];
 let _hydrated = false;
+let _hydratedIdentityId: string | null = null;
 let _hydratePromise: Promise<void> | null = null;
 
 type NormalizedList<T> = { items: T[]; changed: boolean };
@@ -956,23 +969,37 @@ function refreshSessionPreviewMetadata(sessions: ChatSession[]): NormalizedList<
  * a failed attempt allows the next call to retry.
  */
 export function hydrateChatStorage(): Promise<void> {
+    const requestedIdentityId = currentIdentityId();
+    if (_hydrated && _hydratedIdentityId !== requestedIdentityId) resetChatStorageForIdentity();
     if (_hydrated || typeof window === "undefined") return Promise.resolve();
     if (_hydratePromise) return _hydratePromise;
     _hydratePromise = initChatDb().then(data => {
-        const normalizedToolHistory = normalizeLegacyTextToolHistory(data.messages);
+        const identityId = currentIdentityId();
+        const hasIdentityPartition = data.sessions.some(session => Boolean(session.identityId)) || data.contacts.some(contact => Boolean(contact.identityId));
+        const scopedSessions = data.sessions
+            .filter(session => isCurrentIdentity(session) || (!hasIdentityPartition && !session.identityId))
+            .map(session => session.identityId ? session : { ...session, identityId });
+        const scopedSessionIds = new Set(scopedSessions.map(session => session.id));
+        const scopedContacts = data.contacts
+            .filter(contact => isCurrentIdentity(contact) || (!hasIdentityPartition && !contact.identityId))
+            .map(contact => contact.identityId ? contact : { ...contact, identityId });
+        const normalizedToolHistory = normalizeLegacyTextToolHistory(
+            data.messages.filter(message => scopedSessionIds.has(message.sessionId)),
+        );
         _messagesCache = normalizedToolHistory.items;
         if (normalizedToolHistory.changedMessages.length > 0) {
             dbPutMessages(normalizedToolHistory.changedMessages);
         }
-        let normalizedContacts = normalizeChatContacts(data.contacts);
-        const normalizedSessions = normalizeChatSessions(data.sessions);
+        let normalizedContacts = normalizeChatContacts(scopedContacts);
+        const normalizedSessions = normalizeChatSessions(scopedSessions);
         const redirectedMessages = redirectMessagesToPreferredSessions(normalizedSessions.redirects);
         const refreshedSessions = refreshSessionPreviewMetadata(normalizedSessions.items);
         normalizedContacts = restoreContactsForPrivateSessions(normalizedContacts.items, normalizedSessions.items);
         _contactsCache = normalizedContacts.items;
         _sessionsCache = refreshedSessions.items;
-        if (normalizedContacts.changed) dbReplaceContacts(normalizedContacts.items);
-        if (normalizedSessions.changed || redirectedMessages > 0 || refreshedSessions.changed) dbReplaceSessions(refreshedSessions.items);
+        if (normalizedContacts.changed) dbReplaceContactsForIdentity(identityId, normalizedContacts.items);
+        if (normalizedSessions.changed || redirectedMessages > 0 || refreshedSessions.changed) dbReplaceSessionsForIdentity(identityId, refreshedSessions.items);
+        _hydratedIdentityId = identityId;
         _hydrated = true;
     }).catch(err => {
         console.warn("[ChatStorage] hydration failed, will retry on next call:", err);
@@ -989,19 +1016,42 @@ function _loadAllMessages(): ChatMessage[] {
     return _messagesCache;
 }
 
+function currentIdentityId(): string {
+    return getCurrentGlobalIdentityId();
+}
+
+export function getChatStorageIdentityId(): string {
+    return currentIdentityId();
+}
+
+function isCurrentIdentity(value: { identityId?: string }): boolean {
+    return value.identityId === currentIdentityId();
+}
+
+export function resetChatStorageForIdentity(): void {
+    _contactsCache = [];
+    _sessionsCache = [];
+    _messagesCache = [];
+    _hydrated = false;
+    _hydratedIdentityId = null;
+    _hydratePromise = null;
+}
+
 // ── CRUD for Contacts ─────────────────────────
 export function loadChatContacts(): ChatContact[] {
+    _contactsCache = _contactsCache.filter(isCurrentIdentity);
     let normalized = normalizeChatContacts(_contactsCache);
     normalized = restoreContactsForPrivateSessions(normalized.items, _sessionsCache);
     if (normalized.changed) {
         _contactsCache = normalized.items;
-        if (_hydrated && typeof window !== "undefined") dbReplaceContacts(normalized.items);
+        if (_hydrated && typeof window !== "undefined") dbReplaceContactsForIdentity(currentIdentityId(), normalized.items);
     }
     return _contactsCache;
 }
 
 export function saveChatContacts(contacts: ChatContact[]) {
-    const normalized = normalizeChatContacts(contacts);
+    const identityId = currentIdentityId();
+    const normalized = normalizeChatContacts(contacts.map(contact => ({ ...contact, identityId })));
     _contactsCache = normalized.items;
     if (!_hydrated && typeof window !== "undefined") {
         console.warn("[ChatStorage] saveChatContacts before hydration; using additive write to avoid replacing existing contacts.");
@@ -1020,6 +1070,7 @@ export function addChatContact(characterId: string): ChatContact | null {
 
     const newContact: ChatContact = {
         id: `contact_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        identityId: currentIdentityId(),
         characterId,
         addedAt: new Date().toISOString()
     };
@@ -1035,18 +1086,20 @@ export function removeChatContact(characterId: string) {
 
 // ── CRUD for Sessions ─────────────────────────
 export function loadChatSessions(): ChatSession[] {
+    _sessionsCache = _sessionsCache.filter(isCurrentIdentity);
     const normalized = normalizeChatSessions(_sessionsCache);
     const redirectedMessages = redirectMessagesToPreferredSessions(normalized.redirects);
     const refreshed = refreshSessionPreviewMetadata(normalized.items);
     if (normalized.changed || redirectedMessages > 0 || refreshed.changed) {
         _sessionsCache = refreshed.items;
-        if (_hydrated && typeof window !== "undefined") dbReplaceSessions(refreshed.items);
+        if (_hydrated && typeof window !== "undefined") dbReplaceSessionsForIdentity(currentIdentityId(), refreshed.items);
     }
     return _sessionsCache;
 }
 
 export function saveChatSessions(sessions: ChatSession[]) {
-    const normalized = normalizeChatSessions(sessions);
+    const identityId = currentIdentityId();
+    const normalized = normalizeChatSessions(sessions.map(session => ({ ...session, identityId })));
     const redirectedMessages = redirectMessagesToPreferredSessions(normalized.redirects);
     const refreshed = refreshSessionPreviewMetadata(normalized.items);
     _sessionsCache = refreshed.items;
@@ -1055,7 +1108,7 @@ export function saveChatSessions(sessions: ChatSession[]) {
         dbPutSessions(refreshed.items);
         return;
     }
-    if (normalized.changed || redirectedMessages > 0 || refreshed.changed) dbReplaceSessions(refreshed.items);
+    if (normalized.changed || redirectedMessages > 0 || refreshed.changed) dbReplaceSessionsForIdentity(identityId, refreshed.items);
     else dbPutSessions(refreshed.items);
 }
 
@@ -1066,6 +1119,7 @@ export function createOrGetSession(contactId: string): ChatSession {
 
     const newSession: ChatSession = {
         id: `sess_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        identityId: currentIdentityId(),
         contactId,
         unreadCount: 0,
         updatedAt: new Date().toISOString(),
@@ -1083,6 +1137,7 @@ export function createGroupSession(groupName: string, participantIds: string[], 
     const isSpectator = options?.isSpectator === true;
     const newSession: ChatSession = {
         id: `sess_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        identityId: currentIdentityId(),
         contactId: `group_${Date.now()}`, // synthetic contactId for group
         unreadCount: 0,
         updatedAt: new Date().toISOString(),
@@ -1131,6 +1186,16 @@ export function loadChatMessages(sessionId: string, limit?: number): ChatMessage
     const all = getSortedSessionMessages(sessionId);
     if (limit && limit < all.length) return all.slice(-limit);
     return all;
+}
+
+/** Read-only messages for an explicitly authorized same-world identity. */
+export async function loadMessagesForIdentity(characterId: string, identityId: string, limit: number): Promise<ChatMessage[]> {
+    const identity = identityId;
+    const sessions = await chatDb.sessions.where("identityId").equals(identity).toArray();
+    const targetSessions = sessions.filter(session => !session.isGroup && session.contactId === characterId);
+    const sessionIds = new Set(targetSessions.map(session => session.id));
+    const messages = (await chatDb.messages.toArray()).filter(message => sessionIds.has(message.sessionId));
+    return messages.sort(compareChatMessages).slice(-Math.max(1, limit));
 }
 
 function createMessageId(): string {

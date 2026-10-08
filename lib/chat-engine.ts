@@ -56,6 +56,7 @@ import { setDebugPromptSnapshot, type DebugPromptSnapshot } from "./debug-store"
 import { extractFinishReason } from "./api-helpers";
 import { fetchLlmPayload } from "./llm-http";
 import { loadMemoryConfig, incrementEventCounter } from "./memory-storage";
+import { getCurrentGlobalIdentityId, getLinkedUserIdentities } from "./user-world";
 import { retrieveCoreMemoriesForPrompt, retrieveMemoriesForPrompt } from "./memory-service";
 import { formatCoreMemories, formatLongTermMemories } from "./memory-injector";
 import { maybeRunSummarization } from "./memory-summarizer";
@@ -1844,6 +1845,7 @@ export async function buildChatPromptMessages(
     const usesNativeActions = Boolean(toolsEnabled && nativeToolProtocolForConfig(config));
     const { recentBlocks, truncatedHistory, wbActivationContext, unifiedRecentItems } = prepareShortTermContext(character.id, resolvedAppId, {
         history: historyForPrompt,
+        userName: resolveUserIdentity(character.id, resolvedAppId)?.name,
         includeDirectChatEntries: isOfflineMode,
         includeNativeToolHistory: usesNativeActions,
         excludeOfflineSessionId: options?.excludeOfflineSessionId,
@@ -1860,15 +1862,36 @@ export async function buildChatPromptMessages(
         }
     }
 
+    const memorySync = session.memorySync;
+    const linkedIds = memorySync?.enabled
+        ? getLinkedUserIdentities(getCurrentGlobalIdentityId())
+            .filter(identity => {
+                const source = memorySync.sources[identity.id];
+                return source?.shortTerm === true || source?.longTerm === true || source?.core === true;
+            })
+            .map(identity => identity.id)
+            .slice(0, Math.max(1, memorySync.depth))
+        : [];
     const [memResults, coreResults, musicLocal, musicCloud] = await Promise.all([
-        retrieveMemoriesForPrompt(character.id, wbActivationContext, memConfig).catch(() => null),
-        retrieveCoreMemoriesForPrompt(character.id, memConfig).catch(() => null),
+        retrieveMemoriesForPrompt(character.id, wbActivationContext, memConfig, getCurrentGlobalIdentityId(), linkedIds).catch(() => null),
+        retrieveCoreMemoriesForPrompt(character.id, memConfig, getCurrentGlobalIdentityId(), linkedIds).catch(() => null),
         buildMusicLocalMacro(),
         buildMusicCloudMacro(),
     ]);
 
-    const longTermMemories = memResults ? formatLongTermMemories(memResults) : "";
-    const coreMemories = coreResults ? formatCoreMemories(coreResults) : "";
+    const syncedShortTerm = memorySync?.enabled
+        ? (await Promise.all(linkedIds.filter(id => memorySync.sources[id]?.shortTerm === true).map(async identityId => {
+            const messages = await import("./chat-storage").then(module => module.loadMessagesForIdentity(character.id, identityId, memorySync.depth));
+            const sourceName = (await import("./settings-storage")).loadUserIdentities().find(identity => identity.id === identityId)?.name || "其他用户";
+            return messages.map(message => `${new Date(message.createdAt).toLocaleString()} ${sourceName}与${character.name}：${message.role === "user" ? message.content : message.content}`);
+        }))).flat().join("\n")
+        : "";
+    const longTermMemories = memResults
+        ? formatLongTermMemories(memResults.filter(entry => entry.identityId === getCurrentGlobalIdentityId() || memorySync?.sources[entry.identityId || ""]?.longTerm === true))
+        : "";
+    const coreMemories = coreResults
+        ? formatCoreMemories(coreResults.filter(entry => entry.identityId === getCurrentGlobalIdentityId() || memorySync?.sources[entry.identityId || ""]?.core === true))
+        : "";
     const scheduleSummary = buildCalendarScheduleMarker("character", character.id, getWeekStartIso(now));
     const currentSchedule = getCurrentCalendarScheduleForPrompt("character", character.id, now);
     const musicOnlineHint = isNeteaseConfigured() ? "- 你可以推荐任何歌曲，系统会在线搜索并播放。不局限于用户本地音乐库。\n" : "\n";
@@ -1893,6 +1916,8 @@ export async function buildChatPromptMessages(
             session.offlineBilingualTranslationPrompt,
         )
         : "";
+
+    if (syncedShortTerm) recentBlocks.push({ tag: "recent_chat", content: `【同世界同步的其他用户对话】\n${syncedShortTerm}` });
 
     const llmMessages = assemblePromptPayload({
         character,

@@ -16,6 +16,12 @@ export type UserIdentity = {
     age: string;
     occupation: string;
     customSettings: string;
+    worldLink?: {
+        identityId: string;
+        mode: "none" | "same_world";
+        relationToTarget?: string;
+        relationToSource?: string;
+    };
 };
 
 const DEFAULT_IDENTITIES: UserIdentity[] = [
@@ -312,6 +318,22 @@ export function UserIdentitySettings() {
                                                     className="ui-input"
                                                 />
                                             </div>
+                                        </div>
+
+                                        <div className="flex flex-col gap-1">
+                                            <label className="menu-desc ml-1">用户连接</label>
+                                            <select
+                                                className="ui-select"
+                                                value={identity.worldLink?.mode === "same_world" ? identity.worldLink.identityId : "none"}
+                                                onChange={(e) => updateIdentity(identity.id, { worldLink: e.target.value === "none" ? { identityId: "", mode: "none" } : { identityId: e.target.value, mode: "same_world" } })}
+                                            >
+                                                <option value="none">无连接</option>
+                                                {identities.filter(item => item.id !== identity.id).map(item => <option key={item.id} value={item.id}>同一世界：{item.name}</option>)}
+                                            </select>
+                                            {identity.worldLink?.mode === "same_world" && <>
+                                                <input className="ui-input" value={identity.worldLink.relationToTarget || ""} placeholder="你对对方的关系" onChange={e => updateIdentity(identity.id, { worldLink: { ...identity.worldLink!, relationToTarget: e.target.value } })} />
+                                                <input className="ui-input" value={identity.worldLink.relationToSource || ""} placeholder="对方对你的关系" onChange={e => updateIdentity(identity.id, { worldLink: { ...identity.worldLink!, relationToSource: e.target.value } })} />
+                                            </>}
                                         </div>
 
                                         <div className="flex flex-col gap-1">

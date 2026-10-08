@@ -8,7 +8,8 @@ import { ChatRoom } from "./chat-room";
 import { MascotChatRoom } from "./mascot-chat-room";
 import { UserProfilePanel } from "./user-profile-panel";
 import { MessageCircle, Users, Aperture, UserRound } from "lucide-react";
-import { ChatSession, loadChatSessions, pushChatMessage, hydrateChatStorage } from "@/lib/chat-storage";
+import { ChatSession, loadChatSessions, pushChatMessage, hydrateChatStorage, resetChatStorageForIdentity } from "@/lib/chat-storage";
+import { USER_IDENTITY_CHANGED_EVENT } from "@/lib/settings-storage";
 import { notifyMascotPageContext } from "@/lib/mascot-events";
 import { loadCharacters } from "@/lib/character-storage";
 import { SessionCustomCSS } from "@/components/ui/session-custom-css";
@@ -40,6 +41,18 @@ export const PhoneChatApp = memo(function PhoneChatApp({ onClose, initialSession
     const [visitedSessions, setVisitedSessions] = useState<Map<string, ChatSession>>(new Map());
     const [dbReady, setDbReady] = useState(false);
     const [hideTabBar, setHideTabBar] = useState(false);
+
+    useEffect(() => {
+        const handleIdentityChange = () => {
+            resetChatStorageForIdentity();
+            setActiveSession(null);
+            setVisitedSessions(new Map());
+            setDbReady(false);
+            void hydrateChatStorage().then(() => setDbReady(true));
+        };
+        window.addEventListener(USER_IDENTITY_CHANGED_EVENT, handleIdentityChange);
+        return () => window.removeEventListener(USER_IDENTITY_CHANGED_EVENT, handleIdentityChange);
+    }, []);
 
     // Hydrate IndexedDB → in-memory caches on mount
     useEffect(() => {

@@ -6,6 +6,7 @@ import { loadMemoryEntriesByType } from "./memory-storage";
 import { resolveAuxiliaryApiConfig } from "./settings-storage";
 import { generateEmbedding, resolveEmbeddingModel, cosineSimilarity } from "./memory-embedding";
 import { estimateTokens } from "./token-counter";
+import { areIdentitiesInSameWorld } from "./user-world";
 
 /**
  * Retrieve relevant long-term memories for prompt injection.
@@ -18,9 +19,14 @@ import { estimateTokens } from "./token-counter";
 export async function retrieveMemoriesForPrompt(
     characterId: string,
     currentContext: string,
-    config: MemoryConfig
+    config: MemoryConfig,
+    identityId?: string,
+    sourceIdentityIds: string[] = [],
 ): Promise<MemoryEntry[]> {
-    const longTermEntries = await loadMemoryEntriesByType(characterId, "long_term");
+    const currentIdentityId = identityId || (await import("./user-world")).getCurrentGlobalIdentityId();
+    const allowedSourceIds = sourceIdentityIds.filter(sourceId => areIdentitiesInSameWorld(currentIdentityId, sourceId));
+    const identityIds = [currentIdentityId, ...allowedSourceIds];
+    const longTermEntries = (await Promise.all(identityIds.map(id => loadMemoryEntriesByType(characterId, "long_term", id)))).flat();
     if (longTermEntries.length === 0 || !currentContext.trim()) return [];
 
     const budget = config.longTermTokenBudget;
@@ -63,8 +69,13 @@ export async function retrieveMemoriesForPrompt(
 export async function retrieveCoreMemoriesForPrompt(
     characterId: string,
     config: MemoryConfig,
+    identityId?: string,
+    sourceIdentityIds: string[] = [],
 ): Promise<MemoryEntry[]> {
-    const coreEntries = await loadMemoryEntriesByType(characterId, "core");
+    const currentIdentityId = identityId || (await import("./user-world")).getCurrentGlobalIdentityId();
+    const allowedSourceIds = sourceIdentityIds.filter(sourceId => areIdentitiesInSameWorld(currentIdentityId, sourceId));
+    const identityIds = [currentIdentityId, ...allowedSourceIds];
+    const coreEntries = (await Promise.all(identityIds.map(id => loadMemoryEntriesByType(characterId, "core", id)))).flat();
     if (coreEntries.length === 0) return [];
 
     const sorted = [...coreEntries].sort((a, b) => {
