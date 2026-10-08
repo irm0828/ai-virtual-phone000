@@ -67,7 +67,7 @@ export async function runSummarizationPipeline(
     }
 ): Promise<{ success: boolean; error?: string }> {
     const identityId = options?.identityId || getCurrentGlobalIdentityId();
-    const ownerName = getIdentityById(identityId)?.name || identityId;
+    const ownerName = getIdentityById(identityId)?.name || "未知人物";
     const progressKey = `${identityId}:${characterId}`;
     const config = loadMemoryConfig();
     if (identityId !== getCurrentGlobalIdentityId()) return { success: false, error: "原身份摘要暂缓，切回后继续" };
@@ -112,7 +112,7 @@ export async function runSummarizationPipeline(
     // label 用于在「底层调用大模型日志」中标识这是记忆总结调用
     const result = await simpleLLMCall(
         apiConfig,
-        [{ role: "user", content: `记忆归属人物：${ownerName}（ID=${identityId}）。请使用该人物姓名，不要笼统写“用户”，关系不得归给其他人物。\n${summaryPrompt}` }],
+        [{ role: "user", content: `记忆归属人物：${ownerName}。请使用该人物姓名，不要笼统写“用户”，关系不得归给其他人物。\n${summaryPrompt}` }],
         { temperature: 0.3, label: `记忆总结·${characterName}` },
     );
 

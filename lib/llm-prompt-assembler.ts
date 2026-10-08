@@ -48,6 +48,8 @@ export interface AssemblerInput {
     worldBooks: WorldBookConfig[];
     regexes: RegexConfig[];
     userIdentity?: UserIdentity | null;
+    currentConversationPartner?: string;
+    sameWorldCognition?: string;
     userName?: string;
     appId?: string;
     /** Multi-tag filtering: entry is included only when ALL its tags ⊆ appTags. Overrides appId for tag matching. */
@@ -409,6 +411,8 @@ function getMarkerContent(
     regexCtx?: RegexContext,
     characterRelations?: string,
     dwellingContext?: string,
+    currentConversationPartner?: string,
+    sameWorldCognition?: string,
 ): string | null {
     switch (identifier) {
         case "charDescription":
@@ -417,6 +421,10 @@ function getMarkerContent(
             return character.personality?.trim() || null;
         case "personaDescription":
             return userPersonaText;
+        case "currentConversationPartner":
+            return currentConversationPartner?.trim() || null;
+        case "sameWorldCognition":
+            return sameWorldCognition?.trim() || null;
         case "worldInfoBefore": {
             if (wbBeforeEntries.length === 0) return null;
             const sorted = [...wbBeforeEntries].sort((a, b) => (a.insertion_order ?? 50) - (b.insertion_order ?? 50));
@@ -769,6 +777,8 @@ export function assemblePromptPayload(input: AssemblerInput): LLMMessage[] {
                     regexes, { macroEngine: engine, activeTags },
                     input.characterRelations,
                     input.dwellingContext,
+                    input.currentConversationPartner,
+                    input.sameWorldCognition,
                 );
                 if (markerContent) {
                     // Expand macros in marker content ({{char}}/{{user}} in char descriptions etc.)
@@ -1589,6 +1599,8 @@ export interface GroupAssemblerInput {
     regexes: RegexConfig[];
     appTags?: string[];
     userIdentity?: UserIdentity | null;
+    currentConversationPartner?: string;
+    sameWorldCognition?: string;
     userName?: string;
     groupName?: string;
     memberNames?: string;
@@ -1765,7 +1777,7 @@ export function assembleGroupPromptPayload(input: GroupAssemblerInput): LLMMessa
     let orderIdx = 0;
 
     // Markers to skip inside <member> blocks (injected at group level instead)
-    const SKIP_IN_MEMBER = new Set(["personaDescription"]);
+    const SKIP_IN_MEMBER = new Set(["personaDescription", "currentConversationPartner", "sameWorldCognition"]);
 
     // 1. User persona block before members and chat history.
     const userPersonaText = buildUserPersonaText(userIdentity, resolvedUserName);
@@ -2027,7 +2039,17 @@ export function assembleGroupPromptPayload(input: GroupAssemblerInput): LLMMessa
             if (gcTags && !gcTags.every(t => activeTags.includes(t))) continue;
 
             if (p.marker) {
-                // Skip markers (handled in <member> blocks or at group level)
+                if (p.identifier === "currentConversationPartner" || p.identifier === "sameWorldCognition") {
+                    const text = p.identifier === "currentConversationPartner" ? input.currentConversationPartner : input.sameWorldCognition;
+                    if (text?.trim()) blocks.push({
+                        text: wrapXml(p.identifier, text),
+                        role: "system",
+                        depth: afterChatHistory ? 0 : beforeHistoryDepth,
+                        order: afterChatHistory ? 10 + afterOrderIdx++ : orderIdx++,
+                        marker: p.identifier,
+                    });
+                }
+                // Other markers are handled in member blocks.
                 continue;
             }
 

@@ -1893,7 +1893,7 @@ export async function buildChatPromptMessages(
         ? (await Promise.all(linkedIds.filter(id => memorySync.sources[id]?.shortTerm === true).map(async identityId => {
             const messages = await import("./chat-storage").then(module => module.loadMessagesForIdentity(character.id, identityId, memorySync.depth));
             const sourceName = (await import("./settings-storage")).loadUserIdentities().find(identity => identity.id === identityId)?.name || "其他用户";
-            const lines = messages.filter(message => !message.isRetracted && (message.role === "user" || message.role === "assistant")).map(message => `${new Date(message.createdAt).toLocaleString()} [来源身份=${identityId}，对话双方=${sourceName}与${character.name}] ${message.role === "user" ? sourceName : character.name}：${message.content}`);
+            const lines = messages.filter(message => !message.isRetracted && (message.role === "user" || message.role === "assistant")).map(message => `${new Date(message.createdAt).toLocaleString()} ${message.role === "user" ? sourceName : character.name}：${message.content}`);
             const budget = memorySync.sources[identityId]?.shortTermTokenBudget ?? 4000;
             let used = 0;
             const selected: string[] = [];
@@ -1943,7 +1943,11 @@ export async function buildChatPromptMessages(
         unifiedRecentItems.push({ kind: "event", timestamp: now.toISOString(), sourceApp: "chat", sourceTag: "recent_chat", text });
     }
 
+    const worldPeople = getLinkedUserIdentities(identityId);
+    const worldCognition = worldPeople.map(person => `人物：${person.name}；人物设定：${person.bio || "未设置"}；关系认知：${person.customSettings || "未设置"}；与当前人物的关系：${userIdentity.worldRelations?.[person.id] || person.worldRelations?.[identityId] || "未设置，不得推定"}`).join("\n");
     const llmMessages = assemblePromptPayload({
+        currentConversationPartner: `当前对话对象是${userIdentity.name}。其他身份是独立人物，不是当前对话对象。记忆中关系和经历只能归属于注明的人物，绝不能把其他人的恋爱关系、称呼或承诺套到当前人物。`,
+        sameWorldCognition: `当前世界人物认知（不包含其他人物的聊天经历）：\n${worldCognition || "没有其他已连接的用户身份"}\n这些人物是不同的人；未提供的经历与关系不得推定。`,
         character,
         history: promptHistory,
         preset,
@@ -1997,13 +2001,7 @@ export async function buildChatPromptMessages(
             content: "本次自定义 APP AI 任务只输出严格 JSON。不要输出 Markdown 代码块、解释文字或聊天富媒体指令。",
         });
     }
-    const worldPeople = getLinkedUserIdentities(identityId);
-    const worldCognition = worldPeople.map(person => `人物：${person.name}（ID=${person.id}）；人物设定：${person.bio || "未设置"}；关系认知：${person.customSettings || "未设置"}；与当前人物的关系：${userIdentity.worldRelations?.[person.id] || person.worldRelations?.[identityId] || "未设置，不得推定"}`).join("\n");
-    llmMessages.push({ role: "system", content: `当前世界人物认知（不包含其他人物的聊天经历）：\n${worldCognition || "没有其他已连接的用户身份"}\n这些人物是不同的人；未提供的经历与关系不得推定。` });
-    llmMessages.push({
-        role: "system",
-        content: `当前对话对象是${userIdentity.name}（身份ID=${identityId}），本次会话ID=${session.id}。其他身份是独立人物，不是当前对话对象。记忆中关系和经历只能归属于注明的人物，绝不能把其他人的恋爱关系、称呼或承诺套到当前人物。`,
-    });
+
     appendEmptyGenerateGuardMessage(llmMessages, config, historyForPrompt);
 
     return { llmMessages, character, config, preset, regexes, userIdentity, toolsEnabled };

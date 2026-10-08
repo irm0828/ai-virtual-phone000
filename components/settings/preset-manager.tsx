@@ -82,6 +82,8 @@ const MARKER_NAMES: Record<string, string> = {
     "◇ 用户人设": "personaDescription", "◇ 世界书（角色前）": "worldInfoBefore",
     "◇ 角色描述": "charDescription", "◇ 角色性格": "charPersonality",
     "◇ 角色关系": "characterRelations",
+    "◇ 当前对话对象": "currentConversationPartner",
+    "◇ 同世界人物认知": "sameWorldCognition",
     "◇ 世界书（角色后）": "worldInfoAfter",
     "◇ 日程": "calendarSchedule",
     "◇ 核心记忆": "memoryCore", "◇ 长期记忆": "memoryLongTerm",

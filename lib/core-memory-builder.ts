@@ -87,7 +87,7 @@ export async function runCoreMemoryPipeline(
 
     const result = await simpleLLMCall(
         apiConfig,
-        [{ role: "user", content: `记忆归属人物：${loadUserIdentities().find(identity => identity.id === identityId)?.name || identityId}（ID=${identityId}）。请明确写出人物姓名与关系归属，不要统称“用户”。\n${prompt}` }],
+        [{ role: "user", content: `记忆归属人物：${loadUserIdentities().find(identity => identity.id === identityId)?.name || "未知人物"}。请明确写出人物姓名与关系归属，不要统称“用户”。\n${prompt}` }],
         { temperature: 0.3 },
     );
 

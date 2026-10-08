@@ -463,6 +463,7 @@ async function buildGroupChatPromptMessages(
     );
 
     const llmMessages = assembleGroupPromptPayload({
+        currentConversationPartner: userIdentity ? `本次群聊的用户是${userIdentity.name}。其他身份是不同人物，记忆中的关系与承诺只能归属于注明的人物。` : undefined,
         members,
         history: promptHistory,
         preset,
@@ -509,7 +510,7 @@ async function buildGroupChatPromptMessages(
             content: "本次自定义 APP AI 任务只输出严格 JSON。不要输出 Markdown 代码块、解释文字或聊天富媒体指令。",
         });
     }
-    if (userIdentity) llmMessages.push({ role: "system", content: `本次群聊的用户是${userIdentity.name}（身份ID=${userIdentity.id}），会话ID=${session.id}。其他身份是不同人物，记忆中的关系与承诺只能归属于注明的人物。` });
+
     appendEmptyGenerateGuardMessage(llmMessages, config, history);
 
     return { llmMessages, config, preset, regexes, nameToId, memberNames, enabledTools, userName, appTags: activeAppTags };
