@@ -16,6 +16,8 @@ export type UserIdentity = {
     age: string;
     occupation: string;
     customSettings: string;
+    worldId?: string;
+    worldRelations?: Record<string, string>;
     worldLink?: {
         identityId: string;
         mode: "none" | "same_world";
@@ -126,6 +128,10 @@ export function UserIdentitySettings() {
 
     const updateIdentity = (id: string, updates: Partial<UserIdentity>) => {
         let next = identities.map(identity => identity.id === id ? { ...identity, ...updates } : identity);
+        if (Object.prototype.hasOwnProperty.call(updates, "worldId")) {
+            const oldTargetId = identities.find(identity => identity.id === id)?.worldLink?.identityId;
+            next = next.map(identity => identity.id === oldTargetId && identity.worldLink?.identityId === id ? { ...identity, worldLink: { identityId: "", mode: "none" } } : identity);
+        }
         if (updates.worldLink) {
             const targetId = updates.worldLink.mode === "same_world" ? updates.worldLink.identityId : "";
             const previousTargetId = identities.find(identity => identity.id === id)?.worldLink?.identityId;
@@ -351,19 +357,15 @@ export function UserIdentitySettings() {
                                         </div>
 
                                         <div className="flex flex-col gap-1">
-                                            <label className="menu-desc ml-1">用户连接</label>
-                                            <select
-                                                className="ui-select"
-                                                value={identity.worldLink?.mode === "same_world" ? identity.worldLink.identityId : "none"}
-                                                onChange={(e) => updateIdentity(identity.id, { worldLink: e.target.value === "none" ? { identityId: "", mode: "none" } : { identityId: e.target.value, mode: "same_world" } })}
-                                            >
-                                                <option value="none">无连接</option>
-                                                {identities.filter(item => item.id !== identity.id).map(item => <option key={item.id} value={item.id}>同一世界：{item.name}</option>)}
+                                            <label className="menu-desc ml-1">所在世界（不限人数）</label>
+                                            <select className="ui-select" value={identity.worldId || ""} onChange={event => updateIdentity(identity.id, { worldId: event.target.value || undefined, worldLink: { identityId: "", mode: "none" } })}>
+                                                <option value="">独立世界</option>
+                                                {[...new Set(identities.map(item => item.worldId).filter((id): id is string => Boolean(id)))].map(id => <option key={id} value={id}>{identities.filter(item => item.worldId === id).map(item => item.name).join("、")}</option>)}
                                             </select>
-                                            {identity.worldLink?.mode === "same_world" && <>
-                                                <input className="ui-input" value={identity.worldLink.relationToTarget || ""} placeholder="你对对方的关系" onChange={e => updateIdentity(identity.id, { worldLink: { ...identity.worldLink!, relationToTarget: e.target.value } })} />
-                                                <input className="ui-input" value={identity.worldLink.relationToSource || ""} placeholder="对方对你的关系" onChange={e => updateIdentity(identity.id, { worldLink: { ...identity.worldLink!, relationToSource: e.target.value } })} />
-                                            </>}
+                                            <button type="button" className="ui-btn" onClick={() => updateIdentity(identity.id, { worldId: `world-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, worldLink: { identityId: "", mode: "none" } })}>创建新世界</button>
+                                            <span className="menu-desc">其他身份选择同一个世界即可加入；人物认知共享，聊天经历由连通记忆控制。</span>
+                                            {identity.worldId && identities.filter(item => item.id !== identity.id && item.worldId === identity.worldId).map(item => <label key={item.id} className="menu-desc">与{item.name}的关系<input className="ui-input" value={identity.worldRelations?.[item.id] || ""} placeholder="例如：朋友、姐妹、同事" onChange={event => updateIdentity(identity.id, { worldRelations: { ...identity.worldRelations, [item.id]: event.target.value } })} /></label>)}
+
                                         </div>
 
                                         <div className="flex flex-col gap-1">

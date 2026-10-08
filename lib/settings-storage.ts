@@ -1136,7 +1136,20 @@ export function loadUserIdentities(): UserIdentity[] {
     try {
         const raw = kvGet(USER_IDENTITIES_KEY);
         if (!raw) return [];
-        return JSON.parse(raw) as UserIdentity[];
+        const identities = JSON.parse(raw) as UserIdentity[];
+        if (!Array.isArray(identities)) return [];
+        // Preserve legacy reciprocal pairs as a world without rewriting stored data during reads.
+        for (const identity of identities) {
+            if (identity.worldId || identity.worldLink?.mode !== "same_world") continue;
+            const target = identities.find(item => item.id === identity.worldLink?.identityId);
+            if (!target || target.worldId || target.worldLink?.mode !== "same_world" || target.worldLink.identityId !== identity.id) continue;
+            const worldId = `legacy-world:${[identity.id, target.id].sort().join(":")}`;
+            identity.worldId = worldId;
+            target.worldId = worldId;
+            identity.worldRelations = { ...identity.worldRelations, [target.id]: identity.worldLink.relationToTarget || "" };
+            target.worldRelations = { ...target.worldRelations, [identity.id]: target.worldLink.relationToTarget || "" };
+        }
+        return identities;
     } catch {
         return [];
     }

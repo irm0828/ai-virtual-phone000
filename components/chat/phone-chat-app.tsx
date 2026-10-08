@@ -42,9 +42,13 @@ export const PhoneChatApp = memo(function PhoneChatApp({ onClose, initialSession
     const [visitedSessions, setVisitedSessions] = useState<Map<string, ChatSession>>(new Map());
     const [dbReady, setDbReady] = useState(false);
     const [hideTabBar, setHideTabBar] = useState(false);
+    const [identityLoading, setIdentityLoading] = useState(false);
+    const identitySwitchVersion = useRef(0);
 
     useEffect(() => {
         const handleIdentityChange = () => {
+            const version = ++identitySwitchVersion.current;
+            setIdentityLoading(true);
             resetChatStorageForIdentity();
             clearDebugPromptSnapshot();
             clearDebugChatState();
@@ -52,9 +56,17 @@ export const PhoneChatApp = memo(function PhoneChatApp({ onClose, initialSession
             setActiveMascot(false);
             setActiveTab("messages");
             setPendingAddContactId(null);
-            setVisitedSessions(new Map());
-            setDbReady(false);
-            void hydrateChatStorage().then(() => setDbReady(true));
+            // Keep originating rooms mounted so their in-flight requests can finish.
+            void hydrateChatStorage().then(() => {
+                if (version !== identitySwitchVersion.current) return;
+                setDbReady(true);
+                setIdentityLoading(false);
+                window.dispatchEvent(new CustomEvent("chat-messages-updated"));
+            }).catch(error => {
+                if (version !== identitySwitchVersion.current) return;
+                console.error("[Chat] 身份切换加载失败", error);
+                setIdentityLoading(false);
+            });
         };
         window.addEventListener(USER_IDENTITY_CHANGED_EVENT, handleIdentityChange);
         return () => window.removeEventListener(USER_IDENTITY_CHANGED_EVENT, handleIdentityChange);
@@ -258,6 +270,7 @@ export const PhoneChatApp = memo(function PhoneChatApp({ onClose, initialSession
             {...(activeSession || activeMascot ? { "data-room-active": "" } : {})}
             {...(hideTabBar ? { "data-tabbar-hidden": "" } : {})}
         >
+            {identityLoading && <div className="absolute inset-0 z-[200] flex items-center justify-center bg-[var(--c-bg)]" role="status" aria-live="polite">正在加载用户身份…</div>}
             {/* Chat app-level custom CSS (lower priority than per-session CSS) */}
             {chatAppCSS && <SessionCustomCSS css={chatAppCSS} scope=".chat-app" />}
             {/* The Main Content Area */}

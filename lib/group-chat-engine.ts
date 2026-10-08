@@ -50,6 +50,7 @@ import {
     loadWorldBooks,
     loadRegexes,
     resolveUserIdentity,
+    loadUserIdentities,
 } from "./settings-storage";
 import {
     assembleGroupPromptPayload,
@@ -257,6 +258,7 @@ function scheduleGroupMemorySummarization(
     chars: ReturnType<typeof loadCharacters>,
     history: ChatMessage[],
     replyCount: number,
+    identityId: string,
 ): void {
     const lastMessage = history[history.length - 1];
     const userEventCount = lastMessage?.role === "user" ? 1 : 0;
@@ -269,10 +271,10 @@ function scheduleGroupMemorySummarization(
         if (!character) continue;
 
         for (let i = 0; i < totalNewEvents; i++) {
-            incrementEventCounter(characterId);
+            incrementEventCounter(`${identityId}:${characterId}`);
         }
 
-        maybeRunSummarization(characterId, character.name)
+        maybeRunSummarization(characterId, character.name, identityId)
             .catch(err => console.warn("[GroupChat] Memory counter/summarization failed:", err));
     }
 }
@@ -319,7 +321,8 @@ async function buildGroupChatPromptMessages(
         ? []
         : (activeSlot.regexIds || []).map(id => allRegexes.find(r => r.id === id)).filter(Boolean) as typeof allRegexes;
 
-    const userIdentity = resolveUserIdentity(undefined, "group_chat");
+    const userIdentity = session.identityId ? loadUserIdentities().find(identity => identity.id === session.identityId) || null : resolveUserIdentity();
+    if (!userIdentity && !session.isSpectator) throw new ChatEngineError("群聊所属用户身份不存在。");
     const userName = userIdentity?.name ?? "用户";
     const baseAppTags = options?.appTags ?? ["group_chat", "text"];
     // 围观群：追加 spectator tag 激活围观语境条目（tags 子集过滤，老条目不受影响）。
@@ -346,6 +349,7 @@ async function buildGroupChatPromptMessages(
             ? []
             : (charSlot.worldBookIds || []).map(id => allWorldBooks.find(w => w.id === id)).filter(Boolean) as typeof allWorldBooks;
         const { wbActivationContext } = prepareShortTermContext(charId, "group_chat", {
+            identityId: session.identityId || userIdentity?.id,
             userName,
             excludeGroupSessionId: isOfflineMode ? undefined : session.id,
             excludeOfflineSessionId: options?.excludeOfflineSessionId,
@@ -354,8 +358,8 @@ async function buildGroupChatPromptMessages(
         let coreMemories = "", longTermMemories = "";
         try {
             const [coreResults, results] = await Promise.all([
-                retrieveCoreMemoriesForPrompt(charId, memConfig),
-                retrieveMemoriesForPrompt(charId, wbActivationContext, memConfig),
+                retrieveCoreMemoriesForPrompt(charId, memConfig, session.identityId || userIdentity?.id),
+                retrieveMemoriesForPrompt(charId, wbActivationContext, memConfig, session.identityId || userIdentity?.id),
             ]);
             coreMemories = formatCoreMemories(coreResults);
             longTermMemories = formatLongTermMemories(results);
@@ -386,12 +390,13 @@ async function buildGroupChatPromptMessages(
 
     const enabledTools = options?.disableTools ? [] : getEnabledTools("group_chat");
     const usesNativeActions = Boolean(nativeToolProtocolForConfig(config) && enabledTools.length > 0);
-    const annotatedHistory = annotateGroupHistory(history, participantIds, userName);
+    const annotatedHistory = annotateGroupHistory(history.filter(message => message.sessionId === session.id), participantIds, userName);
     const {
         truncatedHistory: truncatedAnnotatedHistory,
         wbActivationContext,
         unifiedRecentItems,
     } = prepareGroupShortTermContext(participantIds, annotatedHistory, {
+        identityId: session.identityId || userIdentity?.id,
         userName,
         excludeGroupSessionId: isOfflineMode ? undefined : session.id,
         excludeOfflineSessionId: options?.excludeOfflineSessionId,
@@ -504,6 +509,7 @@ async function buildGroupChatPromptMessages(
             content: "本次自定义 APP AI 任务只输出严格 JSON。不要输出 Markdown 代码块、解释文字或聊天富媒体指令。",
         });
     }
+    if (userIdentity) llmMessages.push({ role: "system", content: `本次群聊的用户是${userIdentity.name}（身份ID=${userIdentity.id}），会话ID=${session.id}。其他身份是不同人物，记忆中的关系与承诺只能归属于注明的人物。` });
     appendEmptyGenerateGuardMessage(llmMessages, config, history);
 
     return { llmMessages, config, preset, regexes, nameToId, memberNames, enabledTools, userName, appTags: activeAppTags };
@@ -1081,7 +1087,8 @@ export async function generateGroupChatCompletion(
     }
 
     if (!options?.skipMemorySummarization) {
-        scheduleGroupMemorySummarization(participantIds, chars, history, finalResults.length);
+        const ownerId = session.identityId;
+        if (ownerId) scheduleGroupMemorySummarization(participantIds, chars, history, finalResults.length, ownerId);
     }
 
     return finalResults;

@@ -43,7 +43,7 @@ import { TransferTargetModal } from "./transfer-target-modal";
 import { GiftPickerModal } from "./gift-picker-modal";
 import { ConfirmDialog } from "@/components/ui/modal";
 import { deleteWeixinCloudMessagesFromCloud, emitWeixinSyncToast, syncAllWeixinBotRuntimesToCloud } from "@/lib/weixin-cloud-sync";
-import { loadBindingConfig, loadPresets, loadRegexes, resolveBinding, resolveUserIdentity } from "@/lib/settings-storage";
+import { loadBindingConfig, loadPresets, loadRegexes, resolveBinding, resolveUserIdentity, loadUserIdentities } from "@/lib/settings-storage";
 import { generateGroupChatCompletion, generateGroupOfflineChatCompletion, parseGroupChatResponse, buildEditableGroupRoundText } from "@/lib/group-chat-engine";
 import { appendChatOfflineTurn, deleteChatOfflineTurn, deleteChatOfflineTurnsFrom, extractThinkingTag, loadChatOfflineTurns, parseOfflineResponse, saveChatOfflineTurns, updateChatOfflineTurn, type ChatOfflineTurn } from "@/lib/chat-offline-storage";
 import { applyDisplayRegex, applyEditRegex } from "@/lib/llm-prompt-assembler";
@@ -1379,7 +1379,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
     }, [selectStoredMessageWindow]);
 
     const syncMessagesFromStorage = useCallback(() => {
-        applyStoredMessageWindow(loadChatMessages(session.id));
+        applyStoredMessageWindow(loadChatMessages(session.id, undefined, session.identityId));
     }, [applyStoredMessageWindow, session.id]);
 
     const closeContextMenu = () => {
@@ -1720,7 +1720,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
     );
 
     useEffect(() => {
-        setUserIdentity(resolveUserIdentity(session.contactId, "chat"));
+        setUserIdentity(session.identityId ? loadUserIdentities().find(identity => identity.id === session.identityId) || null : resolveUserIdentity());
         setTransientMessages([]);
         setOfflineMode(kvGet(CHAT_OFFLINE_MODE_PREFIX + session.id) === "1");
         setOfflineVisibleCount(OFFLINE_INITIAL_LOAD);
@@ -1737,7 +1737,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
         setOfflineTurns(loadChatOfflineTurns(session.id));
 
         // Prewarm sticker cache for all relevant characters, then load messages
-        const allMsgs = loadChatMessages(session.id);
+        const allMsgs = loadChatMessages(session.id, undefined, session.identityId);
         const msgs = allMsgs.length > INITIAL_LOAD ? allMsgs.slice(-INITIAL_LOAD) : allMsgs;
         const nextHasMore = allMsgs.length > INITIAL_LOAD;
         hasMoreRef.current = nextHasMore;
@@ -1930,7 +1930,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
                 scrollTop: el.scrollTop,
             };
         }
-        const allMsgs = loadChatMessages(session.id);
+        const allMsgs = loadChatMessages(session.id, undefined, session.identityId);
         const currentCount = messages.length;
         const nextCount = Math.min(currentCount + LOAD_MORE_COUNT, allMsgs.length);
         if (nextCount <= currentCount) {
@@ -2205,7 +2205,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
 
     const handleGroupRedPacketAction = (action: "accept" | "decline", claimerName: string, ownerName?: string) => {
         // 从 localStorage 读最新数据，避免 processGroupParts 循环中多人领取时闭包过期
-        const freshMessages = loadChatMessages(session.id);
+        const freshMessages = loadChatMessages(session.id, undefined, session.identityId);
         const targetMsg = [...freshMessages].reverse().find(m => {
             if (m.mediaType !== "red_packet") return false;
             if (m.mediaData?.status !== "pending" && m.mediaData?.status !== "opened") return false;
@@ -2264,7 +2264,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
 
     // 转账：按 ownerName 匹配发送人，且验证 claimerName === recipientName
     const handleGroupTransferAction = (action: "accept" | "decline", claimerName: string, ownerName?: string) => {
-        const freshMessages = loadChatMessages(session.id);
+        const freshMessages = loadChatMessages(session.id, undefined, session.identityId);
         const targetMsg = [...freshMessages].reverse().find(m => {
             if (m.mediaType !== "transfer" || m.mediaData?.status !== "pending") return false;
             if (!ownerName) return true;
@@ -2305,7 +2305,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
     };
 
     const handleGroupPaymentRequestAction = (action: "accept" | "decline", claimerName: string, ownerName?: string) => {
-        const freshMessages = loadChatMessages(session.id);
+        const freshMessages = loadChatMessages(session.id, undefined, session.identityId);
         const targetMsg = [...freshMessages].reverse().find(m => {
             if (m.mediaType !== "payment_request" || m.mediaData?.status !== "pending") return false;
             if (!ownerName) return true;
@@ -3338,7 +3338,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
 
     // Helper: trigger one AI reply based on current chat history (for events like call connect/hangup, decline)
     const triggerReply = async () => {
-        const latestMessages = loadChatMessages(session.id);
+        const latestMessages = loadChatMessages(session.id, undefined, session.identityId);
         applyStoredMessageWindow(latestMessages);
         await runManagedGeneration({ history: latestMessages });
     };
@@ -3573,7 +3573,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
         streamAccumRef.current = "";
         setStreamPreview(null);
         try {
-            const latestMessages = loadChatMessages(session.id);
+            const latestMessages = loadChatMessages(session.id, undefined, session.identityId);
             if (session.isGroup) {
                 const streamedImageReplacementTasks: Promise<unknown>[] = [];
                 // 每轮 LLM 调用的思维链：中间轮挂到该轮首条气泡，最终轮传给 processGroupParts
@@ -3869,7 +3869,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
                     window.dispatchEvent(new CustomEvent(CHAT_BG_COMPLETE, { detail: { sessionId: session.id } }));
                 }
                 // If user sent more messages while AI was generating, show the generate button again
-                const latestMsgs = loadChatMessages(session.id);
+                const latestMsgs = loadChatMessages(session.id, undefined, session.identityId);
                 const last = latestMsgs[latestMsgs.length - 1];
                 if (last && last.role === "user") {
                     setPendingGenerate(true);
@@ -4412,7 +4412,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
             return;
         }
 
-        const originalMessage = messages.find(m => m.id === editingMessageId) || loadChatMessages(session.id).find(m => m.id === editingMessageId);
+        const originalMessage = messages.find(m => m.id === editingMessageId) || loadChatMessages(session.id, undefined, session.identityId).find(m => m.id === editingMessageId);
         const isEditingSystemInstruction = originalMessage ? isSystemInstructionMessage(originalMessage) : false;
         const placement = originalMessage?.role === "user" ? 1 : 2;
         const nextContent = isEditingSystemInstruction
@@ -4530,7 +4530,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
         const editedResponseContent = applyEditTextRegex(editingResponseContent.trim(), 2, false);
 
         if (session.isGroup && editingResponseRoundId) {
-            const storedMessages = loadChatMessages(session.id);
+            const storedMessages = loadChatMessages(session.id, undefined, session.identityId);
             const roundMessages = storedMessages.filter(msg => msg.responseRoundId === editingResponseRoundId);
             if (roundMessages.length === 0) {
                 showChatToast("没有找到这轮群聊回复");
@@ -4665,7 +4665,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
             return;
         }
 
-        const storedMessages = loadChatMessages(session.id);
+        const storedMessages = loadChatMessages(session.id, undefined, session.identityId);
         const batchMessages = storedMessages.filter(msg => msg.responseBatchId === editingResponseBatchId);
         if (batchMessages.length === 0) {
             showChatToast("没有找到这次回复的原始内容");
@@ -4823,7 +4823,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
             return;
         }
         setActiveMessageId(null);
-        const targetMsg = loadChatMessages(session.id).find(m => m.id === msgId);
+        const targetMsg = loadChatMessages(session.id, undefined, session.identityId).find(m => m.id === msgId);
         if (!targetMsg) return;
         void deleteWeixinCloudBeforeLocal([targetMsg], () => {
             deleteChatMessage(msgId);
@@ -4841,7 +4841,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
             return;
         }
         setActiveMessageId(null);
-        const storedMessages = loadChatMessages(session.id);
+        const storedMessages = loadChatMessages(session.id, undefined, session.identityId);
         const targetMsg = storedMessages.find(m => m.id === msgId);
         if (!targetMsg) return;
         const targetMessages = storedMessages.filter(m => (
@@ -5243,7 +5243,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
 
     const multiDeleteTargetIds = useMemo(() => {
         if (selectedMessageIds.size === 0) return [];
-        const storedMessages = loadChatMessages(session.id);
+        const storedMessages = loadChatMessages(session.id, undefined, session.identityId);
         const storedIndexById = new Map(storedMessages.map((msg, index) => [msg.id, index]));
         const targets = new Set<string>();
 
@@ -5304,7 +5304,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
 
     const handleMultiDeleteConfirmed = () => {
         const targetIds = new Set(multiDeleteTargetIds);
-        const targetMessages = loadChatMessages(session.id).filter(msg => targetIds.has(msg.id));
+        const targetMessages = loadChatMessages(session.id, undefined, session.identityId).filter(msg => targetIds.has(msg.id));
         setShowConfirmMultiDelete(false);
         void deleteWeixinCloudBeforeLocal(targetMessages, () => {
             const deletedCount = deleteChatMessagesByIds(session.id, multiDeleteTargetIds);
@@ -5317,7 +5317,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
     /* Settings panel is rendered as an overlay (not early return) to preserve chat scroll position */
 
     const jumpToStoredMessage = useCallback((messageId: string) => {
-        const allMsgs = loadChatMessages(session.id);
+        const allMsgs = loadChatMessages(session.id, undefined, session.identityId);
         const targetIndex = allMsgs.findIndex(msg => msg.id === messageId);
         if (targetIndex < 0) return;
 

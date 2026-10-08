@@ -5,7 +5,7 @@ import { ChevronLeft } from "lucide-react";
 import { loadChatSessions, loadChatContacts, ChatSession, createOrGetSession, createGroupSession, pushChatMessage, addChatContact, loadChatMessages, getLastVisibleSessionMessage, getChatMessagePreview } from "@/lib/chat-storage";
 import { loadCharacters } from "@/lib/character-storage";
 import { Character } from "@/lib/character-types";
-import { resolveUserIdentity } from "@/lib/settings-storage";
+import { loadBindingConfig, loadUserIdentities, resolveUserIdentity, saveBindingConfig } from "@/lib/settings-storage";
 import type { UserIdentity } from "@/components/settings/user-identity";
 import { PENDING_REPLY_PREFIX } from "@/lib/friend-request-engine";
 import { clearRequestsForCharacter, dispatchFriendRequestUpdated } from "@/lib/friend-request-storage";
@@ -117,12 +117,20 @@ export function ChatMessageList({ onCloseApp, activeSession, onSelectSession, on
     const [mergePrompt, setMergePrompt] = useState<DuplicateSessionGroup[] | null>(null);
     const [mergeSelected, setMergeSelected] = useState<Set<string>>(new Set());
     const [identity, setIdentity] = useState<UserIdentity | null>(null);
+    const [showIdentityPicker, setShowIdentityPicker] = useState(false);
     const mascotSettings = useSyncExternalStore(subscribeMascotSettings, getMascotSettingsSnapshot, getMascotSettingsSnapshot);
     const mascotChat = useSyncExternalStore(subscribeMascotChat, getMascotChatSnapshot, getMascotChatSnapshot);
     const [mascotAvatarUrl, setMascotAvatarUrl] = useState(mascotSettings.avatarImage || DEFAULT_MASCOT_AVATAR);
 
     useEffect(() => {
-        setIdentity(resolveUserIdentity());
+        const refreshIdentity = () => setIdentity(resolveUserIdentity());
+        refreshIdentity();
+        window.addEventListener("user-identity-changed", refreshIdentity);
+        window.addEventListener("user-identities-updated", refreshIdentity);
+        return () => {
+            window.removeEventListener("user-identity-changed", refreshIdentity);
+            window.removeEventListener("user-identities-updated", refreshIdentity);
+        };
     }, []);
 
     useEffect(() => {
@@ -180,13 +188,30 @@ export function ChatMessageList({ onCloseApp, activeSession, onSelectSession, on
 
     return (
         <div className="relative flex-1 h-full">
+            {showIdentityPicker && <div className="modal-overlay modal-overlay-bottom" onClick={() => setShowIdentityPicker(false)}>
+                <div className="modal-sheet" role="dialog" aria-modal="true" aria-label="切换用户身份" onClick={event => event.stopPropagation()}>
+                    <div className="modal-header"><span className="modal-header-title">切换用户身份</span></div>
+                    <div className="modal-body hide-scrollbar">
+                        {loadUserIdentities().map(user => <button key={user.id} type="button" className="menu-item w-full text-left" aria-pressed={identity?.id === user.id} onClick={() => {
+                            setShowIdentityPicker(false);
+                            if (user.id === identity?.id) return;
+                            const config = loadBindingConfig();
+                            saveBindingConfig({ ...config, globalDefaults: { ...config.globalDefaults, userIdentityId: user.id } });
+                            setIdentity(user);
+                        }}>
+                            <div className="menu-label-group"><span className="menu-label">{user.name}</span><span className="menu-desc">{user.id}</span></div>
+                            {identity?.id === user.id && <span className="menu-desc">当前</span>}
+                        </button>)}
+                    </div>
+                </div>
+            </div>}
             <PageShell
                 leftAction={
                     <div className="flex items-center min-w-max">
                         <button className="page-back-btn shrink-0 mr-2" type="button" onClick={onCloseApp} aria-label="返回">
                             <ChevronLeft size={24} strokeWidth={1.5} />
                         </button>
-                        <div className="flex items-center gap-[10px]">
+                        <button type="button" aria-label="切换用户身份" onClick={() => setShowIdentityPicker(true)} className="flex items-center gap-[10px] text-left">
                             <div className="w-[36px] h-[36px] rounded-full overflow-hidden bg-[var(--c-input)] flex items-center justify-center shrink-0">
                                 {identity?.avatarUrl ? (
                                     <img src={identity.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
@@ -198,10 +223,10 @@ export function ChatMessageList({ onCloseApp, activeSession, onSelectSession, on
                                 <span className="ts-16 font-bold text-[var(--c-text-title)] leading-tight">{identity?.name || "用户"}</span>
                                 <div className="flex items-center gap-1 mt-1">
                                     <span className="w-[8px] h-[8px] rounded-full bg-[#2dd36f]"></span>
-                                    <span className="ts-10 text-[var(--c-icon)] font-medium">在线</span>
+                                    <span className="ts-10 text-[var(--c-icon)] font-medium">{identity?.id || "未选择身份"}</span>
                                 </div>
                             </div>
-                        </div>
+                        </button>
                     </div>
                 }
                 rightAction={

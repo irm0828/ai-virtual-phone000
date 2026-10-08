@@ -9,8 +9,9 @@ import {
     getLastCoreSummarizedTimestamp,
     setLastCoreSummarizedTimestamp,
 } from "./memory-storage";
-import { resolveAuxiliaryApiConfig } from "./settings-storage";
+import { resolveAuxiliaryApiConfig, loadUserIdentities } from "./settings-storage";
 import { simpleLLMCall } from "./api-helpers";
+import { getCurrentGlobalIdentityId } from "./user-world";
 
 const coreBuildingSet = new Set<string>();
 
@@ -37,10 +38,12 @@ function formatCoreTimelineForSummarization(
 export async function runCoreMemoryPipeline(
     characterId: string,
     characterName: string,
-    options?: { force?: boolean },
+    options?: { force?: boolean; identityId?: string },
 ): Promise<{ success: boolean; error?: string; rebuiltCount?: number }> {
+    const identityId = options?.identityId || getCurrentGlobalIdentityId();
+    const progressKey = `${identityId}:${characterId}`;
     const config = loadMemoryConfig();
-    const allLongTermEntries = await loadMemoryEntriesByType(characterId, "long_term");
+    const allLongTermEntries = await loadMemoryEntriesByType(characterId, "long_term", identityId);
 
     if (allLongTermEntries.length === 0) {
         return { success: false, error: "没有可用于总结核心记忆的长期记忆" };
@@ -51,7 +54,7 @@ export async function runCoreMemoryPipeline(
         return { success: false, error: "未配置记忆总结 API（请在绑定配置 → 辅助API绑定中设置）" };
     }
 
-    const afterTimestamp = options?.force ? undefined : (getLastCoreSummarizedTimestamp(characterId) ?? undefined);
+    const afterTimestamp = options?.force ? undefined : (getLastCoreSummarizedTimestamp(progressKey) ?? undefined);
     const entries = allLongTermEntries
         .filter(entry => !afterTimestamp || entry.createdAt > afterTimestamp)
         .map(entry => ({
@@ -66,7 +69,7 @@ export async function runCoreMemoryPipeline(
         .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 
     if (entries.length === 0) {
-        if (!options?.force) resetCoreMemoryCounter(characterId);
+        if (!options?.force) resetCoreMemoryCounter(progressKey);
         return { success: false, error: "没有新的长期记忆需要总结" };
     }
 
@@ -84,7 +87,7 @@ export async function runCoreMemoryPipeline(
 
     const result = await simpleLLMCall(
         apiConfig,
-        [{ role: "user", content: prompt }],
+        [{ role: "user", content: `记忆归属人物：${loadUserIdentities().find(identity => identity.id === identityId)?.name || identityId}（ID=${identityId}）。请明确写出人物姓名与关系归属，不要统称“用户”。\n${prompt}` }],
         { temperature: 0.3 },
     );
 
@@ -118,6 +121,7 @@ export async function runCoreMemoryPipeline(
     const coreEntry: MemoryEntry = {
         id: `mem_core_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         characterId,
+        identityId,
         sourceApp: dominantSource,
         type: "core",
         content: summary,
@@ -132,9 +136,9 @@ export async function runCoreMemoryPipeline(
     };
     await saveMemoryEntry(coreEntry);
 
-    setLastCoreSummarizedTimestamp(characterId, latest);
+    setLastCoreSummarizedTimestamp(progressKey, latest);
     if (!options?.force) {
-        resetCoreMemoryCounter(characterId);
+        resetCoreMemoryCounter(progressKey);
     }
 
     return { success: true, rebuiltCount: 1 };
@@ -143,21 +147,23 @@ export async function runCoreMemoryPipeline(
 export async function maybeRunCoreMemoryPipeline(
     characterId: string,
     characterName: string,
+    identityId = getCurrentGlobalIdentityId(),
 ): Promise<void> {
     const config = loadMemoryConfig();
     if (!config.autoBuildCoreEnabled) return;
 
-    const counter = getCoreMemoryCounter(characterId);
+    const progressKey = `${identityId}:${characterId}`;
+    const counter = getCoreMemoryCounter(progressKey);
     if (counter < config.coreSummarizationInterval) return;
 
-    if (coreBuildingSet.has(characterId)) return;
-    coreBuildingSet.add(characterId);
+    if (coreBuildingSet.has(progressKey)) return;
+    coreBuildingSet.add(progressKey);
     try {
-        const result = await runCoreMemoryPipeline(characterId, characterName);
+        const result = await runCoreMemoryPipeline(characterId, characterName, { identityId });
         if (!result.success) {
             console.warn("[CoreMemory] Auto summary failed:", result.error);
         }
     } finally {
-        coreBuildingSet.delete(characterId);
+        coreBuildingSet.delete(progressKey);
     }
 }

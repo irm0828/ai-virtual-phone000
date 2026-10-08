@@ -20,6 +20,7 @@ import { loadNativeTimeline, formatTimelineForSummarization, filterTimelineByAll
 import { generateEmbedding, resolveEmbeddingModel } from "./memory-embedding";
 import { simpleLLMCall } from "./api-helpers";
 import { maybeRunCoreMemoryPipeline } from "./core-memory-builder";
+import { getCurrentGlobalIdentityId, getIdentityById } from "./user-world";
 
 /** Per-character lock to prevent concurrent summarization. */
 const summarizingSet = new Set<string>();
@@ -31,20 +32,21 @@ const summarizingSet = new Set<string>();
  */
 export async function maybeRunSummarization(
     characterId: string,
-    characterName: string
+    characterName: string,
+    identityId = getCurrentGlobalIdentityId(),
 ): Promise<void> {
     const config = loadMemoryConfig();
     if (!config.autoSummarizeEnabled) return;
 
-    const counter = getEventCounter(characterId);
-    if (counter < config.summarizationEventInterval) return;
-
-    if (summarizingSet.has(characterId)) return;
-    summarizingSet.add(characterId);
+    const progressKey = `${identityId}:${characterId}`;
+    const counter = getEventCounter(progressKey);
+    if (counter < config.summarizationEventInterval || identityId !== getCurrentGlobalIdentityId()) return;
+    if (summarizingSet.has(progressKey)) return;
+    summarizingSet.add(progressKey);
     try {
-        await runSummarizationPipeline(characterId, characterName);
+        await runSummarizationPipeline(characterId, characterName, { identityId });
     } finally {
-        summarizingSet.delete(characterId);
+        summarizingSet.delete(progressKey);
     }
 }
 
@@ -61,9 +63,14 @@ export async function runSummarizationPipeline(
         force?: boolean;
         /** 手动指定总结起点（覆盖进度水位线）；force 为真时忽略 */
         sinceTimestamp?: string;
+        identityId?: string;
     }
 ): Promise<{ success: boolean; error?: string }> {
+    const identityId = options?.identityId || getCurrentGlobalIdentityId();
+    const ownerName = getIdentityById(identityId)?.name || identityId;
+    const progressKey = `${identityId}:${characterId}`;
     const config = loadMemoryConfig();
+    if (identityId !== getCurrentGlobalIdentityId()) return { success: false, error: "原身份摘要暂缓，切回后继续" };
 
     // Resolve API from auxiliary binding
     const apiConfig = resolveAuxiliaryApiConfig("memorySummaryApiConfigId");
@@ -74,7 +81,7 @@ export async function runSummarizationPipeline(
     // Read native app data (chat messages, moments) directly — no separate event log
     const afterTimestamp = options?.force
         ? undefined
-        : options?.sinceTimestamp ?? (getLastSummarizedTimestamp(characterId) ?? undefined);
+        : options?.sinceTimestamp ?? (getLastSummarizedTimestamp(progressKey) ?? undefined);
     // 记忆来源开关同样作用于长期总结：被关掉的来源不进总结素材。
     // 进度水位线取「过滤后」最后一条的时间，因此关掉的来源不会把水位线推过头，
     // 但已被水位线越过的内容重新打开后也不会回补——这一点在设置里已注明。
@@ -84,7 +91,7 @@ export async function runSummarizationPipeline(
     );
 
     if (allEntries.length < 4) {
-        if (!options?.force) resetEventCounter(characterId);
+        if (!options?.force) resetEventCounter(progressKey);
         return { success: false, error: allEntries.length === 0 ? "没有可总结的事件" : "事件不足 4 条" };
     }
 
@@ -105,7 +112,7 @@ export async function runSummarizationPipeline(
     // label 用于在「底层调用大模型日志」中标识这是记忆总结调用
     const result = await simpleLLMCall(
         apiConfig,
-        [{ role: "user", content: summaryPrompt }],
+        [{ role: "user", content: `记忆归属人物：${ownerName}（ID=${identityId}）。请使用该人物姓名，不要笼统写“用户”，关系不得归给其他人物。\n${summaryPrompt}` }],
         { temperature: 0.3, label: `记忆总结·${characterName}` },
     );
 
@@ -151,6 +158,7 @@ export async function runSummarizationPipeline(
     const longTermEntry: MemoryEntry = {
         id: `mem_lt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         characterId,
+        identityId,
         sourceApp: dominantSource as MemoryEntry["sourceApp"],
         type: "long_term",
         content: summary,
@@ -167,18 +175,18 @@ export async function runSummarizationPipeline(
     await saveMemoryEntry(longTermEntry);
 
     // Update last summarized timestamp + reset counter
-    setLastSummarizedTimestamp(characterId, latest);
-    resetEventCounter(characterId);
+    setLastSummarizedTimestamp(progressKey, latest);
+    resetEventCounter(progressKey);
 
     // Enforce long-term limit
-    const allLongTerm = await loadMemoryEntries(characterId);
+    const allLongTerm = await loadMemoryEntries(characterId, identityId);
     if (allLongTerm.length > config.maxLongTermEntries) {
         const excess = allLongTerm.slice(0, allLongTerm.length - config.maxLongTermEntries);
         await deleteMemoryEntries(excess.map(e => e.id));
     }
 
-    incrementCoreMemoryCounter(characterId);
-    await maybeRunCoreMemoryPipeline(characterId, characterName);
+    incrementCoreMemoryCounter(progressKey);
+    await maybeRunCoreMemoryPipeline(characterId, characterName, identityId);
 
     console.log(`[MemorySummarizer] Summarized ${allEntries.length} entries → 1 long-term memory`);
     return { success: true };

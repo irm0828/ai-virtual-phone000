@@ -7,6 +7,11 @@ import { resolveAuxiliaryApiConfig } from "./settings-storage";
 import { generateEmbedding, resolveEmbeddingModel, cosineSimilarity } from "./memory-embedding";
 import { estimateTokens } from "./token-counter";
 import { areIdentitiesInSameWorld } from "./user-world";
+import { formatLongTermMemories } from "./memory-injector";
+
+function memoryTokens(entry: MemoryEntry): number {
+    return estimateTokens(formatLongTermMemories([entry])) + 4;
+}
 
 /**
  * Retrieve relevant long-term memories for prompt injection.
@@ -27,14 +32,14 @@ export async function retrieveMemoriesForPrompt(
     const allowedSourceIds = sourceIdentityIds.filter(sourceId => areIdentitiesInSameWorld(currentIdentityId, sourceId));
     const identityIds = [currentIdentityId, ...allowedSourceIds];
     const longTermEntries = (await Promise.all(identityIds.map(id => loadMemoryEntriesByType(characterId, "long_term", id)))).flat();
-    if (longTermEntries.length === 0 || !currentContext.trim()) return [];
+    if (longTermEntries.length === 0) return [];
 
     const budget = config.longTermTokenBudget;
 
     // Calculate total tokens for all entries
     let totalTokens = 0;
     for (const entry of longTermEntries) {
-        totalTokens += estimateTokens(entry.content) + 4;
+        totalTokens += memoryTokens(entry);
     }
 
     // Strategy 1: all fit within budget → return all
@@ -95,7 +100,7 @@ function fillByBudget(entries: MemoryEntry[], budget: number): MemoryEntry[] {
     const result: MemoryEntry[] = [];
     let used = 0;
     for (const entry of entries) {
-        const tokens = estimateTokens(entry.content) + 4;
+        const tokens = memoryTokens(entry);
         if (used + tokens > budget) break;
         result.push(entry);
         used += tokens;

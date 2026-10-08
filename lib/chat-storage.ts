@@ -76,7 +76,7 @@ export type ChatSession = {
     memorySync?: {
         enabled: boolean;
         depth: number;
-        sources: Record<string, { shortTerm: boolean; longTerm: boolean; core: boolean }>;
+        sources: Record<string, { shortTerm: boolean; longTerm: boolean; core: boolean; shortTermTokenBudget?: number; longTermTokenBudget?: number; coreMemoryTokenBudget?: number }>;
     };
     // Group chat fields
     isGroup?: boolean;
@@ -576,6 +576,8 @@ let _hydratedIdentityId: string | null = null;
 let _cacheIdentityId: string | null = null;
 let _hydrateGeneration = 0;
 let _hydratePromise: Promise<void> | null = null;
+// Retain originating partitions for in-flight replies; never move them to the new identity.
+const identityPartitions = new Map<string, { sessions: ChatSession[]; contacts: ChatContact[]; messages: ChatMessage[] }>();
 
 type NormalizedList<T> = { items: T[]; changed: boolean };
 type NormalizedSessionList = NormalizedList<ChatSession> & { redirects: Map<string, string> };
@@ -975,6 +977,17 @@ export function hydrateChatStorage(): Promise<void> {
     if (_cacheIdentityId !== requestedIdentityId) resetChatStorageForIdentity();
     if (_hydrated && _hydratedIdentityId !== requestedIdentityId) resetChatStorageForIdentity();
     if (_hydrated || typeof window === "undefined") return Promise.resolve();
+    const retained = identityPartitions.get(requestedIdentityId);
+    if (retained) {
+        _sessionsCache = retained.sessions;
+        _contactsCache = retained.contacts;
+        _messagesCache = retained.messages;
+        _cacheIdentityId = requestedIdentityId;
+        _hydratedIdentityId = requestedIdentityId;
+        _hydrated = true;
+        identityPartitions.delete(requestedIdentityId);
+        return Promise.resolve();
+    }
     if (_hydratePromise) return _hydratePromise;
     const generation = _hydrateGeneration;
     _cacheIdentityId = requestedIdentityId;
@@ -1044,6 +1057,9 @@ function isCurrentIdentity(value: { identityId?: string }): boolean {
 }
 
 export function resetChatStorageForIdentity(): void {
+    if (_cacheIdentityId && _hydrated) {
+        identityPartitions.set(_cacheIdentityId, { sessions: _sessionsCache, contacts: _contactsCache, messages: _messagesCache });
+    }
     _hydrateGeneration += 1;
     _contactsCache = [];
     _sessionsCache = [];
@@ -1118,6 +1134,8 @@ export function loadChatSessions(): ChatSession[] {
 
 export function saveChatSessions(sessions: ChatSession[]) {
     const identityId = currentIdentityId();
+    const foreign = sessions.filter(session => session.identityId && session.identityId !== identityId);
+    if (foreign.length) throw new Error("拒绝将原身份会话重新归属到当前身份。");
     const normalized = normalizeChatSessions(sessions.map(session => ({ ...session, identityId })));
     const redirectedMessages = redirectMessagesToPreferredSessions(normalized.redirects);
     const refreshed = refreshSessionPreviewMetadata(normalized.items);
@@ -1201,8 +1219,14 @@ export function reassignChatSessionMessages(fromSessionId: string, toSessionId: 
 }
 
 // ── CRUD for Messages ─────────────────────────
-export function loadChatMessages(sessionId: string, limit?: number): ChatMessage[] {
+export function loadChatMessages(sessionId: string, limit?: number, identityId?: string): ChatMessage[] {
     if (_cacheIdentityId !== currentIdentityId()) resetChatStorageForIdentity();
+    if (identityId && identityId !== currentIdentityId()) {
+        const partition = identityPartitions.get(identityId);
+        if (!partition?.sessions.some(session => session.id === sessionId)) return [];
+        const messages = partition.messages.filter(message => message.sessionId === sessionId).sort(compareChatMessages);
+        return limit && limit < messages.length ? messages.slice(-limit) : messages;
+    }
     const session = _sessionsCache.find(item => item.id === sessionId);
     if (!session || session.identityId !== currentIdentityId()) return [];
     const all = getSortedSessionMessages(sessionId);
@@ -1242,9 +1266,27 @@ export function pushChatMessage(msg: Omit<ChatMessage, "id" | "createdAt" | "sta
 }): ChatMessage {
     if (_cacheIdentityId !== currentIdentityId()) resetChatStorageForIdentity();
     const owner = _sessionsCache.find(session => session.id === msg.sessionId);
-    if (!owner || owner.identityId !== currentIdentityId()) {
-        throw new Error("拒绝向非当前身份的聊天会话写入消息。");
+    if (!owner) {
+        const partition = [...identityPartitions.values()].find(value => value.sessions.some(session => session.id === msg.sessionId));
+        if (!partition) throw new Error("聊天会话不存在，拒绝写入消息。");
+        const target = partition.sessions.find(session => session.id === msg.sessionId)!;
+        const orders = partition.messages.filter(message => message.sessionId === msg.sessionId).map(message => message.order ?? -1);
+        let saved: ChatMessage = { ...msg, id: createMessageId(), createdAt: msg.createdAt || new Date().toISOString(), order: orders.reduce((max, order) => Math.max(max, order), -1) + 1, status: msg.status || "sent" };
+        const transformed = runChatPluginTransformSync("message.beforePersist", { message: saved });
+        if (transformed.message?.id === saved.id && transformed.message.sessionId === msg.sessionId) saved = transformed.message;
+        partition.messages.push(saved);
+        dbPutMessage(saved);
+        if (isSessionPreviewCandidate(saved)) {
+            target.lastMessageId = saved.id;
+            target.lastMessagePreview = getChatMessagePreview(saved);
+            target.updatedAt = saved.createdAt;
+            dbPutSessions([target]);
+        }
+        if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(CHAT_MESSAGE_PUSHED_EVENT, { detail: { message: saved } }));
+        emitChatPluginEvent("message.persisted", { message: saved });
+        return saved;
     }
+    if (owner.identityId !== currentIdentityId()) throw new Error("聊天会话身份不匹配，拒绝写入消息。");
     let newMsg: ChatMessage = {
         ...msg,
         id: createMessageId(),
@@ -1842,11 +1884,7 @@ export function updateMessageMediaStatus(messageId: string, newStatus: "pending"
 
 /** Update the full mediaData of a message (for group red packet claims, etc.). */
 export function updateMessageMediaData(messageId: string, data: ChatMessage["mediaData"]) {
-    const idx = _messagesCache.findIndex(m => m.id === messageId);
-    if (idx !== -1) {
-        _messagesCache[idx] = { ..._messagesCache[idx], mediaData: data };
-        dbPutMessage(_messagesCache[idx]);
-    }
+    updateChatMessage(messageId, { mediaData: data });
 }
 
 export function updateMessageMediaUrl(messageId: string, mediaUrl: string) {
@@ -1897,7 +1935,21 @@ export function updateChatMessage(
     patch: Partial<Pick<ChatMessage, "content" | "mediaType" | "mediaUrl" | "mediaData">>,
 ): ChatMessage | null {
     const idx = _messagesCache.findIndex(m => m.id === messageId);
-    if (idx === -1) return null;
+    if (idx === -1) {
+        const partition = [...identityPartitions.values()].find(value => value.messages.some(message => message.id === messageId));
+        if (!partition) return null;
+        const index = partition.messages.findIndex(message => message.id === messageId);
+        const updated = { ...partition.messages[index], ...patch };
+        partition.messages[index] = updated;
+        dbPutMessage(updated);
+        const owner = partition.sessions.find(session => session.id === updated.sessionId);
+        if (owner?.lastMessageId === updated.id) {
+            owner.lastMessagePreview = getChatMessagePreview(updated);
+            dbPutSessions([owner]);
+        }
+        emitChatPluginEvent("message.updated", { id: messageId, patch });
+        return updated;
+    }
 
     _messagesCache[idx] = { ..._messagesCache[idx], ...patch };
     const updated = _messagesCache[idx];
@@ -2293,11 +2345,13 @@ function isBeforeStateCutoff(
 /** Scan all direct and group chat messages for a character's latest stateValues. */
 export function getLatestCharacterStateValues(
     characterId: string,
-    options?: { before?: Pick<ChatMessage, "createdAt" | "id"> },
+    options?: { before?: Pick<ChatMessage, "createdAt" | "id">; identityId?: string },
 ): StateValue[] {
     if (!characterId) return [];
-    const sessionsById = new Map(loadChatSessions().map(session => [session.id, session]));
-    const candidates = _loadAllMessages()
+    const partition = options?.identityId && options.identityId !== currentIdentityId() ? identityPartitions.get(options.identityId) : undefined;
+    if (options?.identityId && options.identityId !== currentIdentityId() && !partition) return [];
+    const sessionsById = new Map((partition?.sessions || loadChatSessions()).map(session => [session.id, session]));
+    const candidates = (partition?.messages || _loadAllMessages())
         .filter(msg => {
             if (!isBeforeStateCutoff(msg, options?.before)) return false;
             return getStateOwnerCharacterId(msg, sessionsById) === characterId;

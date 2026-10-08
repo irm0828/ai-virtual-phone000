@@ -8,6 +8,7 @@ import { buildGroupAdminBracketText } from "./group-admin";
 import { loadMomentPosts, loadMomentComments } from "./moments-storage";
 import { loadCharacters } from "./character-storage";
 import { resolveUserIdentity } from "./settings-storage";
+import { getCurrentGlobalIdentityId } from "./user-world";
 import { loadMemoryConfig } from "./memory-storage";
 import type { MemoryConfig } from "./memory-types";
 import { estimateTokens } from "./token-counter";
@@ -162,6 +163,7 @@ export function loadNativeTimeline(
     characterId: string,
     options?: {
         afterTimestamp?: string;
+        identityId?: string;
         userName?: string;
         appId?: import("./settings-types").ContentAppId;
         excludeOfflineSessionId?: string;
@@ -170,6 +172,8 @@ export function loadNativeTimeline(
     }
 ): NativeTimelineEntry[] {
     const entries: NativeTimelineEntry[] = [];
+    // Native projections still use the active partition; never read a new identity for an old request.
+    if (options?.identityId && options.identityId !== getCurrentGlobalIdentityId()) return entries;
     const chars = loadCharacters();
     const userName = options?.userName ?? resolveUserIdentity(characterId, options?.appId)?.name ?? "用户";
     const charName = chars.find(c => c.id === characterId)?.name ?? "角色";
@@ -922,6 +926,7 @@ export function prepareShortTermContext(
     characterId: string,
     appId: string,
     options?: {
+        identityId?: string;
         userName?: string;
         history?: ChatMessage[];
         excludeGroupSessionId?: string;
@@ -939,6 +944,7 @@ export function prepareShortTermContext(
 } {
     const timeAware = resolvePromptTimeAware(options?.timeAware);
     let timeline = loadNativeTimeline(characterId, {
+        identityId: options?.identityId,
         userName: options?.userName,
         appId: appId as import("./settings-types").ContentAppId,
         excludeOfflineSessionId: options?.excludeOfflineSessionId,
@@ -1181,6 +1187,7 @@ export function prepareGroupShortTermContext(
     characterIds: string[],
     history: ChatMessage[],
     options?: {
+        identityId?: string;
         userName?: string;
         excludeGroupSessionId?: string;
         excludeOfflineSessionId?: string;
@@ -1201,6 +1208,7 @@ export function prepareGroupShortTermContext(
 
     for (const characterId of uniqueCharacterIds) {
         let timeline = loadNativeTimeline(characterId, {
+            identityId: options?.identityId,
             userName: options?.userName,
             appId: "group_chat",
             excludeOfflineSessionId: options?.excludeOfflineSessionId,

@@ -33,6 +33,7 @@ import {
     loadWorldBooks,
     loadRegexes,
     resolveUserIdentity,
+    loadUserIdentities,
 } from "./settings-storage";
 import { assemblePromptPayload, applyOutputRegex, type LLMMessage, type LLMContentPart } from "./llm-prompt-assembler";
 import { MacroEngine, postProcessTrim } from "./macro-engine";
@@ -61,6 +62,7 @@ import { retrieveCoreMemoriesForPrompt, retrieveMemoriesForPrompt } from "./memo
 import { formatCoreMemories, formatLongTermMemories } from "./memory-injector";
 import { maybeRunSummarization } from "./memory-summarizer";
 import { prepareShortTermContext } from "./short-term-assembler";
+import { estimateTokens } from "./token-counter";
 import { parseActionTags, dispatchActions } from "./action-parser";
 import { findEnabledToolForSchema, getEnabledTools, type EnabledTool } from "./tool-storage";
 import { formatToolsForPrompt, formatToolSchema } from "./tool-prompt";
@@ -1813,11 +1815,15 @@ export async function buildChatPromptMessages(
         ? []
         : (activeSlot.regexIds || []).map(id => allRegexes.find(r => r.id === id)).filter(Boolean) as typeof allRegexes;
 
-    const userIdentity = resolveUserIdentity(character.id, resolvedAppId);
+    // A request belongs to its originating session, not a mutable binding.
+    const identityId = session.identityId || getCurrentGlobalIdentityId();
+    const userIdentity = loadUserIdentities().find(identity => identity.id === identityId) || null;
+    if (!userIdentity) throw new ChatEngineError(`User identity not found: ${identityId}`);
     const attachedImages = config.enableImageRecognition === true ? options?.attachedImages : undefined;
+    const sessionHistory = history.filter(message => message.sessionId === session.id);
     const historyForPrompt: ChatMessage[] = attachedImages?.length
         ? [
-            ...history,
+            ...sessionHistory,
             ...attachedImages.map((imageUrl, index): ChatMessage => ({
                 id: `video-frame-${Date.now()}-${index}`,
                 sessionId: session.id,
@@ -1830,7 +1836,7 @@ export async function buildChatPromptMessages(
                 mediaData: { label: "视频通话当前画面" },
             })),
         ]
-        : history;
+        : sessionHistory;
 
     const now = new Date();
     const promptTimeContext = buildCharacterTimeContext(character.timeZone, now);
@@ -1845,7 +1851,8 @@ export async function buildChatPromptMessages(
     const usesNativeActions = Boolean(toolsEnabled && nativeToolProtocolForConfig(config));
     const { recentBlocks, truncatedHistory, wbActivationContext, unifiedRecentItems } = prepareShortTermContext(character.id, resolvedAppId, {
         history: historyForPrompt,
-        userName: resolveUserIdentity(character.id, resolvedAppId)?.name,
+        identityId,
+        userName: userIdentity.name,
         includeDirectChatEntries: isOfflineMode,
         includeNativeToolHistory: usesNativeActions,
         excludeOfflineSessionId: options?.excludeOfflineSessionId,
@@ -1868,17 +1875,16 @@ export async function buildChatPromptMessages(
         depth: Math.max(1, Math.min(100, Number(session.memorySync.depth) || 10)),
     } : undefined;
     const linkedIds = memorySync?.enabled
-        ? getLinkedUserIdentities(getCurrentGlobalIdentityId())
+        ? getLinkedUserIdentities(identityId)
             .filter(identity => {
                 const source = memorySync.sources[identity.id];
                 return source?.shortTerm === true || source?.longTerm === true || source?.core === true;
             })
             .map(identity => identity.id)
-            .slice(0, Math.max(1, memorySync.depth))
         : [];
     const [memResults, coreResults, musicLocal, musicCloud] = await Promise.all([
-        retrieveMemoriesForPrompt(character.id, wbActivationContext, memConfig, getCurrentGlobalIdentityId(), linkedIds).catch(() => null),
-        retrieveCoreMemoriesForPrompt(character.id, memConfig, getCurrentGlobalIdentityId(), linkedIds).catch(() => null),
+        Promise.all([identityId, ...linkedIds.filter(id => memorySync?.sources[id]?.longTerm)].map(id => retrieveMemoriesForPrompt(character.id, wbActivationContext, id === identityId ? memConfig : { ...memConfig, longTermTokenBudget: memorySync?.sources[id]?.longTermTokenBudget ?? 2000 }, id))).then(results => results.flat()).catch(() => null),
+        Promise.all([identityId, ...linkedIds.filter(id => memorySync?.sources[id]?.core)].map(id => retrieveCoreMemoriesForPrompt(character.id, id === identityId ? memConfig : { ...memConfig, coreMemoryTokenBudget: memorySync?.sources[id]?.coreMemoryTokenBudget ?? 1000 }, id))).then(results => results.flat()).catch(() => null),
         buildMusicLocalMacro(),
         buildMusicCloudMacro(),
     ]);
@@ -1887,14 +1893,24 @@ export async function buildChatPromptMessages(
         ? (await Promise.all(linkedIds.filter(id => memorySync.sources[id]?.shortTerm === true).map(async identityId => {
             const messages = await import("./chat-storage").then(module => module.loadMessagesForIdentity(character.id, identityId, memorySync.depth));
             const sourceName = (await import("./settings-storage")).loadUserIdentities().find(identity => identity.id === identityId)?.name || "其他用户";
-            return messages.map(message => `${new Date(message.createdAt).toLocaleString()} ${sourceName}与${character.name}：${message.role === "user" ? message.content : message.content}`);
+            const lines = messages.filter(message => !message.isRetracted && (message.role === "user" || message.role === "assistant")).map(message => `${new Date(message.createdAt).toLocaleString()} [来源身份=${identityId}，对话双方=${sourceName}与${character.name}] ${message.role === "user" ? sourceName : character.name}：${message.content}`);
+            const budget = memorySync.sources[identityId]?.shortTermTokenBudget ?? 4000;
+            let used = 0;
+            const selected: string[] = [];
+            for (const line of [...lines].reverse()) {
+                const tokens = estimateTokens(line) + 4;
+                if (used + tokens > budget) break;
+                used += tokens;
+                selected.unshift(line);
+            }
+            return selected;
         }))).flat().join("\n")
         : "";
     const longTermMemories = memResults
-        ? formatLongTermMemories(memResults.filter(entry => entry.identityId === getCurrentGlobalIdentityId() || memorySync?.sources[entry.identityId || ""]?.longTerm === true))
+        ? formatLongTermMemories(memResults.filter(entry => entry.identityId === identityId || memorySync?.sources[entry.identityId || ""]?.longTerm === true))
         : "";
     const coreMemories = coreResults
-        ? formatCoreMemories(coreResults.filter(entry => entry.identityId === getCurrentGlobalIdentityId() || memorySync?.sources[entry.identityId || ""]?.core === true))
+        ? formatCoreMemories(coreResults.filter(entry => entry.identityId === identityId || memorySync?.sources[entry.identityId || ""]?.core === true))
         : "";
     const scheduleSummary = buildCalendarScheduleMarker("character", character.id, getWeekStartIso(now));
     const currentSchedule = getCurrentCalendarScheduleForPrompt("character", character.id, now);
@@ -1921,7 +1937,11 @@ export async function buildChatPromptMessages(
         )
         : "";
 
-    if (syncedShortTerm) recentBlocks.push({ tag: "recent_chat", content: `【同世界同步的其他用户对话】\n${syncedShortTerm}` });
+    if (syncedShortTerm) {
+        const text = `【同世界同步的其他用户对话】\n${syncedShortTerm}`;
+        recentBlocks.push({ tag: "recent_chat", content: text });
+        unifiedRecentItems.push({ kind: "event", timestamp: now.toISOString(), sourceApp: "chat", sourceTag: "recent_chat", text });
+    }
 
     const llmMessages = assemblePromptPayload({
         character,
@@ -1932,7 +1952,7 @@ export async function buildChatPromptMessages(
         userIdentity,
         appId: resolvedAppId,
         appTags: effectiveAppTags,
-        initialStateValues: getLatestCharacterStateValues(character.id),
+        initialStateValues: getLatestCharacterStateValues(character.id, { identityId }),
         followUpCount: options?.followUpCount,
         followUpDelay: options?.followUpDelay,
         timedWakeElapsedMinutes: options?.timedWakeElapsedMinutes,
@@ -1977,6 +1997,13 @@ export async function buildChatPromptMessages(
             content: "本次自定义 APP AI 任务只输出严格 JSON。不要输出 Markdown 代码块、解释文字或聊天富媒体指令。",
         });
     }
+    const worldPeople = getLinkedUserIdentities(identityId);
+    const worldCognition = worldPeople.map(person => `人物：${person.name}（ID=${person.id}）；人物设定：${person.bio || "未设置"}；关系认知：${person.customSettings || "未设置"}；与当前人物的关系：${userIdentity.worldRelations?.[person.id] || person.worldRelations?.[identityId] || "未设置，不得推定"}`).join("\n");
+    llmMessages.push({ role: "system", content: `当前世界人物认知（不包含其他人物的聊天经历）：\n${worldCognition || "没有其他已连接的用户身份"}\n这些人物是不同的人；未提供的经历与关系不得推定。` });
+    llmMessages.push({
+        role: "system",
+        content: `当前对话对象是${userIdentity.name}（身份ID=${identityId}），本次会话ID=${session.id}。其他身份是独立人物，不是当前对话对象。记忆中关系和经历只能归属于注明的人物，绝不能把其他人的恋爱关系、称呼或承诺套到当前人物。`,
+    });
     appendEmptyGenerateGuardMessage(llmMessages, config, historyForPrompt);
 
     return { llmMessages, character, config, preset, regexes, userIdentity, toolsEnabled };
@@ -2899,9 +2926,12 @@ async function generateChatCompletionCore(
     // Memory: increment event counter + check if summarization needed (non-blocking)
     (async () => {
         try {
-            incrementEventCounter(character.id); // user message
-            incrementEventCounter(character.id); // AI reply
-            await maybeRunSummarization(character.id, character.name);
+            const ownerId = session.identityId || userIdentity?.id;
+            if (!ownerId) return;
+            const progressKey = `${ownerId}:${character.id}`;
+            incrementEventCounter(progressKey); // user message
+            incrementEventCounter(progressKey); // AI reply
+            await maybeRunSummarization(character.id, character.name, ownerId);
         } catch (err) {
             console.warn("[ChatEngine] Memory counter/summarization failed:", err);
         }

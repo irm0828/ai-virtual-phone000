@@ -397,7 +397,7 @@ export function ChatSettingsPanel({
     // 流式生成：按会话区分（线上/线下），存 ChatSession 字段，默认关
     const [streamOnline, setStreamOnline] = useState(session.streamOnline === true);
     const [streamOffline, setStreamOffline] = useState(session.streamOffline === true);
-    const linkedUsers = getLinkedUserIdentities(getCurrentGlobalIdentityId());
+    const linkedUsers = getLinkedUserIdentities(session.identityId || getCurrentGlobalIdentityId());
     const [memorySync, setMemorySync] = useState(() => ({
         enabled: session.memorySync?.enabled === true,
         depth: Math.max(1, Math.min(100, Number(session.memorySync?.depth) || 10)),
@@ -1102,8 +1102,12 @@ export function ChatSettingsPanel({
                                             <input className="ui-input h-8 w-20" type="number" min={1} max={100} value={memorySync.depth} onChange={event => { const next = { ...memorySync, depth: Math.max(1, Math.min(100, Number(event.target.value) || 1)) }; setMemorySync(next); updateSession({ memorySync: next }); }} />
                                             {linkedUsers.map(user => {
                                                 const current = memorySync.sources[user.id] || { shortTerm: false, longTerm: true, core: true };
-                                                const updateSource = (patch: Partial<typeof current>) => { const next = { ...memorySync, sources: { ...memorySync.sources, [user.id]: { ...current, ...patch } } }; setMemorySync(next); updateSession({ memorySync: next }); };
-                                                return <div key={user.id} className="flex flex-col gap-1"><span className="menu-desc">{user.name}</span><label className="menu-desc"><input type="checkbox" checked={current.shortTerm} onChange={event => updateSource({ shortTerm: event.target.checked })} /> 短期</label><label className="menu-desc"><input type="checkbox" checked={current.longTerm} onChange={event => updateSource({ longTerm: event.target.checked })} /> 长期</label><label className="menu-desc"><input type="checkbox" checked={current.core} onChange={event => updateSource({ core: event.target.checked })} /> 核心</label></div>;
+                                                const updateSource = (patch: Partial<NonNullable<ChatSession["memorySync"]>["sources"][string]>) => { const next = { ...memorySync, sources: { ...memorySync.sources, [user.id]: { ...current, ...patch } } }; setMemorySync(next); updateSession({ memorySync: next }); };
+                                                return <div key={user.id} className="flex flex-col gap-1"><span className="menu-desc">{user.name}</span><label className="menu-desc"><input type="checkbox" checked={current.shortTerm} onChange={event => updateSource({ shortTerm: event.target.checked })} /> 短期</label><label className="menu-desc"><input type="checkbox" checked={current.longTerm} onChange={event => updateSource({ longTerm: event.target.checked })} /> 长期</label><label className="menu-desc"><input type="checkbox" checked={current.core} onChange={event => updateSource({ core: event.target.checked })} /> 核心</label>{([
+                                                    ["shortTermTokenBudget", "短期 Token", 4000],
+                                                    ["longTermTokenBudget", "长期 Token", 2000],
+                                                    ["coreMemoryTokenBudget", "核心 Token", 1000],
+                                                ] as const).map(([key, label, fallback]) => <label key={key} className="menu-desc">{label}<input className="ui-input h-8" type="number" min={0} step={100} value={memorySync.sources[user.id]?.[key] ?? fallback} onChange={event => updateSource({ [key]: Math.max(0, Math.floor(Number(event.target.value) || 0)) })} /></label>)}</div>;
                                             })}
                                         </>}
                                     </div>
