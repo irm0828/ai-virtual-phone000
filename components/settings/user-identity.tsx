@@ -16,14 +16,15 @@ export type UserIdentity = {
     age: string;
     occupation: string;
     customSettings: string;
-    memorySharing?: {
-        shortTerm: boolean;          // 短期记忆（近期对话事件）
-        longTerm: boolean;           // 长期记忆（汇总后的历史）
-        core: boolean;               // 核心记忆（关键关系里程碑）
-        tokenLimits?: {
-            shortTermTokens?: number;   // 短期记忆 token 限额
-            longTermTokens?: number;    // 长期记忆 token 限额
-            coreTokens?: number;        // 核心记忆 token 限额
+    linking?: {
+        mode: "isolated" | "shared_world" | "linked_to_users";  // isolated=独立世界, shared_world=与所有用户共享, linked_to_users=连结到指定用户
+        linkedUserIds?: string[];  // mode=linked_to_users 时，连结到的用户ID列表
+    };
+    crossDialogueSync?: {
+        [characterId: string]: {
+            enabled: boolean;           // 是否同步该角色的跨用户对话
+            syncUserIds?: string[];     // 同步哪些用户和该角色的对话
+            depth?: number;             // 同步最近几条对话（默认不限制）
         };
     };
 };

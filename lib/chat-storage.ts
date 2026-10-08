@@ -7,12 +7,75 @@ import {
     dbPutMessages, dbPutSessions, dbPutContacts, dbDeleteSession,
     dbReplaceContacts, dbReplaceSessions,
 } from "./chat-db";
-import { resolveUserIdentity } from "./settings-storage";
+import { resolveUserIdentity, loadUserIdentities } from "./settings-storage";
+import type { UserIdentity } from "@/components/settings/user-identity";
 import { loadCharacters } from "./character-storage";
 import { kvGet, kvSet, registerKvMigration } from "./kv-db";
 import { emitChatPluginEvent, runChatPluginTransformSync } from "./chat-plugin-hooks";
 import { parseAIResponse } from "./rich-message-parser";
 import { extractTextToolDirectiveText } from "./text-tool-protocol";
+
+/**
+ * Check if a data item (contact/session/message) should be visible to current user
+ * based on user linking configuration.
+ */
+function isVisibleToCurrentUser(createdByUserId: string | undefined): boolean {
+    const currentUser = resolveUserIdentity();
+    if (!currentUser) return true; // No user identity configured, show all data
+    
+    // Data without createdByUserId is legacy data, visible to everyone
+    if (!createdByUserId) return true;
+    
+    // Check linking configuration
+    const linking = currentUser.linking;
+    
+    if (!linking || linking.mode === "shared_world") {
+        // Shared world mode: see all data
+        return true;
+    }
+    
+    if (linking.mode === "isolated") {
+        // Isolated mode: only see own data
+        return createdByUserId === currentUser.id;
+    }
+    
+    if (linking.mode === "linked_to_users") {
+        // Linked mode: see own data + linked users' data
+        const linkedUserIds = linking.linkedUserIds || [];
+        return createdByUserId === currentUser.id || linkedUserIds.includes(createdByUserId);
+    }
+    
+    return true;
+}
+
+/**
+ * Get all user IDs that should be included when loading data for current user.
+ */
+function getVisibleUserIds(): string[] {
+    const currentUser = resolveUserIdentity();
+    if (!currentUser) return []; // No user identity configured
+    
+    const linking = currentUser.linking;
+    
+    if (!linking || linking.mode === "shared_world") {
+        // Shared world mode: return all user IDs
+        const allUsers = loadUserIdentities();
+        return allUsers.map(u => u.id);
+    }
+    
+    if (linking.mode === "isolated") {
+        // Isolated mode: only current user
+        return [currentUser.id];
+    }
+    
+    if (linking.mode === "linked_to_users") {
+        // Linked mode: current user + linked users
+        const linkedUserIds = linking.linkedUserIds || [];
+        return [currentUser.id, ...linkedUserIds];
+    }
+    
+    return [currentUser.id];
+}
 
 export const DEFAULT_VISION_IMAGE_PROMPT_LIMIT = 1;
 export const MAX_VISION_IMAGE_PROMPT_LIMIT = 20;
@@ -29,7 +92,7 @@ export function normalizeVisionImagePromptLimit(value: unknown): number {
 export type ChatContact = {
     id: string; // unique contact id
     characterId: string; // links to global character in character-storage.ts
-    userIdentityId?: string; // User identity this contact belongs to
+    createdByUserId?: string; // Which user created this contact (for linking filtering)
     nickname?: string;
     addedAt: string; // ISO date
 };
@@ -37,7 +100,7 @@ export type ChatContact = {
 export type ChatSession = {
     id: string;
     contactId: string;
-    userIdentityId?: string; // User identity this session belongs to
+    createdByUserId?: string; // Which user created this session (for linking filtering)
     lastMessageId?: string;
     lastMessagePreview?: string;
     unreadCount: number;
@@ -91,7 +154,7 @@ export type NativeToolResultRecord = { toolCallId: string; name: string; content
 export type ChatMessage = {
     id: string;
     sessionId: string;
-    userIdentityId?: string; // User identity when this message was sent (for memory sharing)
+    createdByUserId?: string; // Which user sent this message (for cross-dialogue sync)
     role: ChatMessageRole;
     content: string;
     status: ChatMessageStatus;
@@ -1060,12 +1123,8 @@ export function loadChatContacts(): ChatContact[] {
         if (_hydrated && typeof window !== "undefined") dbReplaceContacts(normalized.items);
     }
     
-    // Filter contacts by current user identity
-    const currentIdentity = resolveUserIdentity();
-    if (currentIdentity) {
-        return _contactsCache.filter(c => c.userIdentityId === currentIdentity.id);
-    }
-    return _contactsCache;
+    // Filter contacts based on user linking configuration
+    return _contactsCache.filter(c => isVisibleToCurrentUser(c.createdByUserId));
 }
 
 export function saveChatContacts(contacts: ChatContact[]) {
@@ -1090,7 +1149,7 @@ export function addChatContact(characterId: string): ChatContact | null {
     const newContact: ChatContact = {
         id: `contact_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         characterId,
-        userIdentityId: currentIdentity?.id,
+        createdByUserId: currentIdentity?.id,
         addedAt: new Date().toISOString()
     };
     saveChatContacts([...contacts, newContact]);
@@ -1113,12 +1172,8 @@ export function loadChatSessions(): ChatSession[] {
         if (_hydrated && typeof window !== "undefined") dbReplaceSessions(refreshed.items);
     }
     
-    // Filter sessions by current user identity
-    const currentIdentity = resolveUserIdentity();
-    if (currentIdentity) {
-        return _sessionsCache.filter(s => s.userIdentityId === currentIdentity.id);
-    }
-    return _sessionsCache;
+    // Filter sessions based on user linking configuration
+    return _sessionsCache.filter(s => isVisibleToCurrentUser(s.createdByUserId));
 }
 
 export function saveChatSessions(sessions: ChatSession[]) {
@@ -1137,21 +1192,14 @@ export function saveChatSessions(sessions: ChatSession[]) {
 
 export function createOrGetSession(contactId: string): ChatSession {
     const sessions = loadChatSessions();
-    // Get current user identity
-    const userIdentity = resolveUserIdentity();
-    const currentIdentityId = userIdentity?.id;
-    
-    // Find session matching both contactId AND current user identity
-    const existing = sessions.find(s => 
-        s.contactId === contactId && 
-        s.userIdentityId === currentIdentityId
-    );
+    const existing = sessions.find(s => s.contactId === contactId);
     if (existing) return existing;
 
+    const currentUser = resolveUserIdentity();
     const newSession: ChatSession = {
         id: `sess_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         contactId,
-        userIdentityId: currentIdentityId,
+        createdByUserId: currentUser?.id,
         unreadCount: 0,
         updatedAt: new Date().toISOString(),
         isPinned: false,
@@ -1166,12 +1214,11 @@ export function createOrGetSession(contactId: string): ChatSession {
 export function createGroupSession(groupName: string, participantIds: string[], options?: { isSpectator?: boolean }): ChatSession {
     const sessions = loadChatSessions();
     const isSpectator = options?.isSpectator === true;
-    // Get current user identity for the new group session
-    const userIdentity = resolveUserIdentity();
+    const currentUser = resolveUserIdentity();
     const newSession: ChatSession = {
         id: `sess_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         contactId: `group_${Date.now()}`, // synthetic contactId for group
-        userIdentityId: userIdentity?.id,
+        createdByUserId: currentUser?.id,
         unreadCount: 0,
         updatedAt: new Date().toISOString(),
         isPinned: false,
@@ -1241,12 +1288,12 @@ export function pushChatMessage(msg: Omit<ChatMessage, "id" | "createdAt" | "sta
     status?: ChatMessageStatus;
     createdAt?: string;
 }): ChatMessage {
-    // Auto-fill userIdentityId if not provided and this is a user message
-    const userIdentityId = msg.userIdentityId || (msg.role === "user" ? resolveUserIdentity()?.id : undefined);
+    // Auto-fill createdByUserId if not provided and this is a user message
+    const createdByUserId = msg.createdByUserId || (msg.role === "user" ? resolveUserIdentity()?.id : undefined);
     
     let newMsg: ChatMessage = {
         ...msg,
-        userIdentityId,
+        createdByUserId,
         id: createMessageId(),
         createdAt: msg.createdAt || new Date().toISOString(),
         order: getNextMessageOrder(msg.sessionId),
