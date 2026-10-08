@@ -14,7 +14,6 @@ import { WorldBookManager } from "./settings/worldbook-manager";
 import { RegexManager } from "./settings/regex-manager";
 import { DataManagement } from "./settings/data-management";
 import { UserIdentitySettings } from "./settings/user-identity";
-import { IdentityDataRepairPanel } from "./settings/identity-data-repair-panel";
 import { AboutDeclaration } from "./settings/about-declaration";
 import { BindingManager } from "./settings/binding-manager";
 import { WeixinSettings } from "./settings/weixin-settings";
@@ -314,7 +313,7 @@ export function PhoneSettingsApp({ onClose, onNotice }: SettingsPageProps) {
             case "data":
                 return <DataManagement onNotice={onNotice} />;
             case "binding":
-                return <><BindingManager /><IdentityDataRepairPanel /></>;
+                return <BindingManager />;
             case "cloud":
                 return <CloudServicesPage />;
             case "weixin":

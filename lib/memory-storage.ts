@@ -6,7 +6,6 @@ import { DEFAULT_MEMORY_CONFIG } from "./memory-types";
 import { kvGet, kvSet, registerKvMigration, registerDynamicPrefix } from "./kv-db";
 import { openIndexedDbAtLeast } from "./idb-open";
 import { getCurrentGlobalIdentityId } from "./user-world";
-import { assertIdentityWritable } from "./identity-operation-state";
 
 // ── Long-term memory DB (unchanged from v1) ──
 
@@ -57,14 +56,11 @@ function runRequest<T>(req: IDBRequest<T>): Promise<T> {
 // ── Long-term Entry CRUD ──
 
 export async function saveMemoryEntry(entry: MemoryEntry): Promise<void> {
-    assertIdentityWritable();
-    const identityId = entry.identityId || getCurrentGlobalIdentityId();
     const db = await openDb();
-    if (!db) throw new Error("记忆数据库无法打开");
+    if (!db) return;
     try {
-        assertIdentityWritable();
         const tx = db.transaction(STORE_NAME, "readwrite");
-        tx.objectStore(STORE_NAME).put({ ...entry, identityId });
+        tx.objectStore(STORE_NAME).put({ ...entry, identityId: entry.identityId || getCurrentGlobalIdentityId() });
         await new Promise<void>((res, rej) => {
             tx.oncomplete = () => res();
             tx.onerror = () => rej(tx.error);
@@ -89,38 +85,30 @@ export async function loadMemoryEntries(characterId: string, identityId = getCur
             const allEntries: MemoryEntry[] = await runRequest(tx.objectStore(STORE_NAME).getAll());
             entries = allEntries.filter(entry => entry.characterId === characterId);
         }
-        // 读取不能改变归属。无归属/错归属的旧记录由有备份的修复工具处理。
+        const legacyOwnerKey = "ai_phone_memory_legacy_identity_owner_v1";
+        let legacyOwnerId = kvGet(legacyOwnerKey);
+        if (!legacyOwnerId) {
+            legacyOwnerId = getCurrentGlobalIdentityId();
+            kvSet(legacyOwnerKey, legacyOwnerId);
+        }
+        const legacyEntries = entries.filter(entry => !entry.identityId);
+        if (legacyEntries.length > 0) {
+            try {
+                const writeTx = db.transaction(STORE_NAME, "readwrite");
+                for (const entry of legacyEntries) writeTx.objectStore(STORE_NAME).put({ ...entry, identityId: legacyOwnerId! });
+                await new Promise<void>((resolve, reject) => {
+                    writeTx.oncomplete = () => resolve();
+                    writeTx.onerror = () => reject(writeTx.error);
+                });
+            } catch { /* legacy memory migration is best effort */ }
+        }
+        entries = entries.map(entry => entry.identityId ? entry : { ...entry, identityId: legacyOwnerId! });
         entries = entries.filter(entry => entry.identityId === identityId);
         entries.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
         return entries;
     } finally {
         db.close();
     }
-}
-
-export async function loadAllMemoryEntriesForRepair(): Promise<MemoryEntry[]> {
-    const db = await openDb();
-    if (!db) throw new Error("记忆数据库无法打开，修复已取消");
-    try {
-        return await runRequest<MemoryEntry[]>(db.transaction(STORE_NAME, "readonly").objectStore(STORE_NAME).getAll());
-    } finally { db.close(); }
-}
-
-export async function writeMemoryEntriesForRepair(entries: MemoryEntry[]): Promise<void> {
-    const db = await openDb();
-    if (!db) throw new Error("记忆数据库无法打开，修复已取消");
-    try {
-        assertIdentityWritable();
-        const tx = db.transaction(STORE_NAME, "readwrite");
-        const done = new Promise<void>((resolve, reject) => {
-            tx.oncomplete = () => resolve();
-            tx.onerror = () => reject(tx.error);
-            tx.onabort = () => reject(tx.error || new Error("记忆事务被中止"));
-        });
-        const store = tx.objectStore(STORE_NAME);
-        for (const entry of entries) store.put(entry);
-        await done;
-    } finally { db.close(); }
 }
 
 export async function loadMemoryEntriesByType(

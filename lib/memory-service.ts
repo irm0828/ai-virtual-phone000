@@ -22,17 +22,12 @@ export async function retrieveMemoriesForPrompt(
     config: MemoryConfig,
     identityId?: string,
     sourceIdentityIds: string[] = [],
-    perSourceBudgets: Record<string, number> = {},
 ): Promise<MemoryEntry[]> {
     const currentIdentityId = identityId || (await import("./user-world")).getCurrentGlobalIdentityId();
     const allowedSourceIds = sourceIdentityIds.filter(sourceId => areIdentitiesInSameWorld(currentIdentityId, sourceId));
-    const longTermEntries = await loadMemoryEntriesByType(characterId, "long_term", currentIdentityId);
-    const sharedEntries = (await Promise.all(allowedSourceIds.map(async id => {
-        const entries = await loadMemoryEntriesByType(characterId, "long_term", id);
-        return fillByBudget(entries.sort((a, b) => b.createdAt.localeCompare(a.createdAt)), perSourceBudgets[id] ?? 0);
-    }))).flat();
-    if (longTermEntries.length === 0 && sharedEntries.length === 0) return [];
-    if (!currentContext.trim()) return [...fillByBudget([...longTermEntries].reverse(), config.longTermTokenBudget), ...sharedEntries];
+    const identityIds = [currentIdentityId, ...allowedSourceIds];
+    const longTermEntries = (await Promise.all(identityIds.map(id => loadMemoryEntriesByType(characterId, "long_term", id)))).flat();
+    if (longTermEntries.length === 0 || !currentContext.trim()) return [];
 
     const budget = config.longTermTokenBudget;
 
@@ -44,7 +39,7 @@ export async function retrieveMemoriesForPrompt(
 
     // Strategy 1: all fit within budget → return all
     if (totalTokens <= budget) {
-        return [...longTermEntries, ...sharedEntries];
+        return longTermEntries;
     }
 
     // Strategy 2: vector recall enabled + embedding API configured → vector search, fill by relevance
@@ -59,7 +54,7 @@ export async function retrieveMemoriesForPrompt(
                     score: cosineSimilarity(queryEmbedding, entry.embedding!),
                 }));
                 scored.sort((a, b) => b.score - a.score);
-                return [...fillByBudget(scored.map(s => s.entry), budget), ...sharedEntries];
+                return fillByBudget(scored.map(s => s.entry), budget);
             }
         }
     }
@@ -68,7 +63,7 @@ export async function retrieveMemoriesForPrompt(
     const sorted = [...longTermEntries].sort(
         (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
-    return [...fillByBudget(sorted, budget), ...sharedEntries];
+    return fillByBudget(sorted, budget);
 }
 
 export async function retrieveCoreMemoriesForPrompt(
@@ -76,15 +71,11 @@ export async function retrieveCoreMemoriesForPrompt(
     config: MemoryConfig,
     identityId?: string,
     sourceIdentityIds: string[] = [],
-    perSourceBudgets: Record<string, number> = {},
 ): Promise<MemoryEntry[]> {
     const currentIdentityId = identityId || (await import("./user-world")).getCurrentGlobalIdentityId();
     const allowedSourceIds = sourceIdentityIds.filter(sourceId => areIdentitiesInSameWorld(currentIdentityId, sourceId));
     const identityIds = [currentIdentityId, ...allowedSourceIds];
-    const coreEntries = (await Promise.all(identityIds.map(async id => {
-        const entries = await loadMemoryEntriesByType(characterId, "core", id);
-        return fillByBudget(entries.sort((a, b) => b.createdAt.localeCompare(a.createdAt)), id === currentIdentityId ? config.coreMemoryTokenBudget : (perSourceBudgets[id] ?? 0));
-    }))).flat();
+    const coreEntries = (await Promise.all(identityIds.map(id => loadMemoryEntriesByType(characterId, "core", id)))).flat();
     if (coreEntries.length === 0) return [];
 
     const sorted = [...coreEntries].sort((a, b) => {
@@ -96,7 +87,7 @@ export async function retrieveCoreMemoriesForPrompt(
         return bDate.localeCompare(aDate);
     });
 
-    return sorted; // 每个用户已按独立预算筛选，不能再以当前用户预算裁掉共享来源。
+    return fillByBudget(sorted, config.coreMemoryTokenBudget);
 }
 
 /** Pick entries in order until token budget is exhausted. */

@@ -125,16 +125,6 @@ export function BindingManager() {
     const [showCharacterPicker, setShowCharacterPicker] = useState(false);
     const [isLoaded, setIsLoaded] = useState(false);
 
-    useEffect(() => {
-        const refresh = () => { setConfig(loadBindingConfig()); setIdentities(loadUserIdentities()); };
-        window.addEventListener("settings-bindings-updated", refresh);
-        window.addEventListener("user-identities-updated", refresh);
-        return () => {
-            window.removeEventListener("settings-bindings-updated", refresh);
-            window.removeEventListener("user-identities-updated", refresh);
-        };
-    }, []);
-
     const reloadData = () => {
         setApiConfigs(loadApiConfigs());
         setVoiceConfigs(loadVoiceConfigs());

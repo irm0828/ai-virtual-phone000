@@ -20,7 +20,6 @@ import { loadNativeTimeline, formatTimelineForSummarization, filterTimelineByAll
 import { generateEmbedding, resolveEmbeddingModel } from "./memory-embedding";
 import { simpleLLMCall } from "./api-helpers";
 import { maybeRunCoreMemoryPipeline } from "./core-memory-builder";
-import { captureIdentityTask } from "./identity-task-context";
 
 /** Per-character lock to prevent concurrent summarization. */
 const summarizingSet = new Set<string>();
@@ -64,7 +63,6 @@ export async function runSummarizationPipeline(
         sinceTimestamp?: string;
     }
 ): Promise<{ success: boolean; error?: string }> {
-    const task = captureIdentityTask();
     const config = loadMemoryConfig();
 
     // Resolve API from auxiliary binding
@@ -153,7 +151,6 @@ export async function runSummarizationPipeline(
     const longTermEntry: MemoryEntry = {
         id: `mem_lt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         characterId,
-        identityId: task.identityId,
         sourceApp: dominantSource as MemoryEntry["sourceApp"],
         type: "long_term",
         content: summary,
@@ -167,23 +164,19 @@ export async function runSummarizationPipeline(
             sourceSessionIds,
         },
     };
-    task.assertCurrent();
     await saveMemoryEntry(longTermEntry);
-    task.assertCurrent();
 
     // Update last summarized timestamp + reset counter
     setLastSummarizedTimestamp(characterId, latest);
     resetEventCounter(characterId);
 
     // Enforce long-term limit
-    const allLongTerm = await loadMemoryEntries(characterId, task.identityId);
-    task.assertCurrent();
+    const allLongTerm = await loadMemoryEntries(characterId);
     if (allLongTerm.length > config.maxLongTermEntries) {
         const excess = allLongTerm.slice(0, allLongTerm.length - config.maxLongTermEntries);
         await deleteMemoryEntries(excess.map(e => e.id));
     }
 
-    task.assertCurrent();
     incrementCoreMemoryCounter(characterId);
     await maybeRunCoreMemoryPipeline(characterId, characterName);
 

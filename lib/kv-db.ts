@@ -225,13 +225,6 @@ export function kvRemove(key: string): void {
         console.warn("[KvDB] delete failed:", key, err));
 }
 
-/** 修复/回滚必须等待删除落盘，失败时保留缓存以便重试。 */
-export async function kvRemoveAsync(key: string): Promise<void> {
-    await kvDb.entries.delete(key);
-    _cache.delete(key);
-    if (isManagedLegacyKey(key)) removeLegacyLocalStorageKey(key);
-}
-
 // ── Iterate keys with a prefix (for dynamic keys) ──
 export function kvKeysWithPrefix(prefix: string): string[] {
     const result: string[] = [];

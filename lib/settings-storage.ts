@@ -15,7 +15,6 @@ import type {
     PromptOrderEntry,
 } from "./settings-types";
 import type { UserIdentity } from "@/components/settings/user-identity";
-import { assertIdentityWritable } from "./identity-operation-state";
 import { createBuiltinPreset, BUILTIN_PRESET_VERSION } from "./builtin-preset";
 import {
     NOVELAI_DEFAULT_MODEL,
@@ -859,31 +858,17 @@ export function loadBindingConfig(): BindingConfig {
 }
 
 export const USER_IDENTITY_CHANGED_EVENT = "user-identity-changed";
-let identityGeneration = 0;
-export function getIdentityGeneration(): number { return identityGeneration; }
 
 export function saveBindingConfig(config: BindingConfig, notify: boolean = true): void {
     if (typeof window === "undefined") return;
-    // 不调用 loadBindingConfig，避免其规范化保存与这里互相递归。
-    let previousId: string | undefined;
-    try { previousId = JSON.parse(kvGet(BINDINGS_KEY) || "{}").globalDefaults?.userIdentityId; } catch { /* empty */ }
-    if (previousId !== config.globalDefaults.userIdentityId) assertIdentityWritable();
+    const previous = loadBindingConfig();
     kvSet(BINDINGS_KEY, JSON.stringify(config));
-    if (previousId !== config.globalDefaults.userIdentityId) {
-        identityGeneration += 1;
+    if (notify) window.dispatchEvent(new CustomEvent("settings-bindings-updated"));
+    if (previous.globalDefaults.userIdentityId !== config.globalDefaults.userIdentityId) {
         window.dispatchEvent(new CustomEvent(USER_IDENTITY_CHANGED_EVENT, {
-            detail: { identityId: config.globalDefaults.userIdentityId, previousIdentityId: previousId, generation: identityGeneration },
+            detail: { identityId: config.globalDefaults.userIdentityId },
         }));
     }
-    if (notify) window.dispatchEvent(new CustomEvent("settings-bindings-updated"));
-}
-
-/** 聊天快捷入口与配置页共用的全局身份写入口。 */
-export function setGlobalUserIdentity(identityId: string): void {
-    if (!loadUserIdentities().some(identity => identity.id === identityId)) throw new Error("用户身份不存在，切换已取消");
-    const config = loadBindingConfig();
-    if (config.globalDefaults.userIdentityId === identityId) return;
-    saveBindingConfig({ ...config, globalDefaults: { ...config.globalDefaults, userIdentityId: identityId } });
 }
 
 /**
@@ -1198,9 +1183,7 @@ export function resolveUserIdentity(characterId?: string, appId?: string): UserI
     const identities = loadUserIdentities();
     if (identities.length === 0) return null;
     const config = loadBindingConfig();
-    // 聊天、群聊、朋友圈与记忆操作必须与全局身份分区一致。
-    const useGlobal = appId === "chat" || appId === "group_chat" || appId === "moments" || !appId;
-    const resolved = useGlobal ? config.globalDefaults : resolveBinding(config, characterId, appId);
+    const resolved = resolveBinding(config, characterId, appId);
     if (resolved.userIdentityId) {
         return identities.find(i => i.id === resolved.userIdentityId) || identities[0];
     }
