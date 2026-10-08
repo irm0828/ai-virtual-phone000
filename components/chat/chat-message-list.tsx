@@ -7,6 +7,7 @@ import { loadCharacters } from "@/lib/character-storage";
 import { Character } from "@/lib/character-types";
 import { resolveUserIdentity } from "@/lib/settings-storage";
 import type { UserIdentity } from "@/components/settings/user-identity";
+import { IdentitySwitcher } from "./identity-switcher";
 import { PENDING_REPLY_PREFIX } from "@/lib/friend-request-engine";
 import { clearRequestsForCharacter, dispatchFriendRequestUpdated } from "@/lib/friend-request-storage";
 import { UserProfilePanel } from "./user-profile-panel";
@@ -186,22 +187,7 @@ export function ChatMessageList({ onCloseApp, activeSession, onSelectSession, on
                         <button className="page-back-btn shrink-0 mr-2" type="button" onClick={onCloseApp} aria-label="返回">
                             <ChevronLeft size={24} strokeWidth={1.5} />
                         </button>
-                        <div className="flex items-center gap-[10px]">
-                            <div className="w-[36px] h-[36px] rounded-full overflow-hidden bg-[var(--c-input)] flex items-center justify-center shrink-0">
-                                {identity?.avatarUrl ? (
-                                    <img src={identity.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
-                                ) : (
-                                    <ChatFallbackAvatar />
-                                )}
-                            </div>
-                            <div className="flex flex-col whitespace-nowrap">
-                                <span className="ts-16 font-bold text-[var(--c-text-title)] leading-tight">{identity?.name || "用户"}</span>
-                                <div className="flex items-center gap-1 mt-1">
-                                    <span className="w-[8px] h-[8px] rounded-full bg-[#2dd36f]"></span>
-                                    <span className="ts-10 text-[var(--c-icon)] font-medium">在线</span>
-                                </div>
-                            </div>
-                        </div>
+                        <IdentitySwitcher identity={identity} />
                     </div>
                 }
                 rightAction={

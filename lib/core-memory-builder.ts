@@ -11,6 +11,7 @@ import {
 } from "./memory-storage";
 import { resolveAuxiliaryApiConfig } from "./settings-storage";
 import { simpleLLMCall } from "./api-helpers";
+import { captureIdentityTask } from "./identity-task-context";
 
 const coreBuildingSet = new Set<string>();
 
@@ -39,8 +40,10 @@ export async function runCoreMemoryPipeline(
     characterName: string,
     options?: { force?: boolean },
 ): Promise<{ success: boolean; error?: string; rebuiltCount?: number }> {
+    const task = captureIdentityTask();
     const config = loadMemoryConfig();
-    const allLongTermEntries = await loadMemoryEntriesByType(characterId, "long_term");
+    const allLongTermEntries = await loadMemoryEntriesByType(characterId, "long_term", task.identityId);
+    task.assertCurrent();
 
     if (allLongTermEntries.length === 0) {
         return { success: false, error: "没有可用于总结核心记忆的长期记忆" };
@@ -118,6 +121,7 @@ export async function runCoreMemoryPipeline(
     const coreEntry: MemoryEntry = {
         id: `mem_core_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         characterId,
+        identityId: task.identityId,
         sourceApp: dominantSource,
         type: "core",
         content: summary,
@@ -130,7 +134,9 @@ export async function runCoreMemoryPipeline(
             sourceSessionIds,
         },
     };
+    task.assertCurrent();
     await saveMemoryEntry(coreEntry);
+    task.assertCurrent();
 
     setLastCoreSummarizedTimestamp(characterId, latest);
     if (!options?.force) {

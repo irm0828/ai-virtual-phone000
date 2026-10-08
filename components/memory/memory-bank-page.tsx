@@ -28,6 +28,7 @@ import { runCoreMemoryPipeline } from "@/lib/core-memory-builder";
 import { resolveAuxiliaryApiConfig, resolveUserIdentity } from "@/lib/settings-storage";
 import { generateEmbedding, resolveEmbeddingModel } from "@/lib/memory-embedding";
 import { BINDING_ACCENTS } from "@/lib/ui-accent-colors";
+import { CharacterMemorySharing } from "./character-memory-sharing";
 
 type MemoryView = "list" | "detail" | "settings";
 type MemoryTab = "short" | "shared" | "core" | "long";
@@ -672,6 +673,7 @@ export function MemoryBankPage({ view, selectedCharId, onSelectChar, onNotice }:
             <div className="flex flex-col absolute inset-0 overflow-hidden" style={{ padding: "0 16px" }}>
                 {/* Content */}
                 <div className="memory-detail-scroll flex-1 overflow-y-auto flex flex-col gap-2 min-h-0">
+                    <CharacterMemorySharing characterId={selectedChar.id} />
                     <MemoryDetailBoundary>
                     {loading ? (
                         <p className="text-center ts-14 mt-10 text-secondary">

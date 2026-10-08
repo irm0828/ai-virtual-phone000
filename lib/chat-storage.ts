@@ -15,6 +15,16 @@ import { emitChatPluginEvent, runChatPluginTransformSync } from "./chat-plugin-h
 import { parseAIResponse } from "./rich-message-parser";
 import { extractTextToolDirectiveText } from "./text-tool-protocol";
 import { getCurrentGlobalIdentityId } from "./user-world";
+import { loadUserIdentities } from "./settings-storage";
+import { assertIdentityWritable } from "./identity-operation-state";
+
+function assertCurrentSessionWritable(sessionId: string): void {
+    assertIdentityWritable();
+    if (_cacheIdentityId !== currentIdentityId()) resetChatStorageForIdentity();
+    if (!_sessionsCache.some(session => session.id === sessionId && session.identityId === currentIdentityId())) {
+        throw new Error("拒绝修改非当前身份的会话，请重新加载聊天列表");
+    }
+}
 
 export const DEFAULT_VISION_IMAGE_PROMPT_LIMIT = 1;
 export const MAX_VISION_IMAGE_PROMPT_LIMIT = 20;
@@ -983,10 +993,8 @@ export function hydrateChatStorage(): Promise<void> {
         if (generation !== _hydrateGeneration || identityId !== requestedIdentityId) return;
         const legacyOwnerKey = "ai_phone_chat_legacy_identity_owner_v1";
         let legacyOwnerId = kvGet(legacyOwnerKey);
-        if (!legacyOwnerId) {
-            legacyOwnerId = identityId;
-            kvSet(legacyOwnerKey, identityId);
-        }
+        // 未确认旧数据归属时，不自动认领；在记忆设置的迁移工具中明确确认。
+        if (!legacyOwnerId) legacyOwnerId = "__legacy_unassigned__";
         const scopedSessions = data.sessions
             .filter(session => (session.identityId || legacyOwnerId) === identityId)
             .map(session => session.identityId ? session : { ...session, identityId: legacyOwnerId! });
@@ -1068,7 +1076,9 @@ export function loadChatContacts(): ChatContact[] {
 }
 
 export function saveChatContacts(contacts: ChatContact[]) {
+    assertIdentityWritable();
     const identityId = currentIdentityId();
+    if (contacts.some(contact => contact.identityId && contact.identityId !== identityId)) throw new Error("联系人归属已变化，请重新加载");
     const normalized = normalizeChatContacts(contacts.map(contact => ({ ...contact, identityId })));
     _contactsCache = normalized.items;
     if (!_hydrated && typeof window !== "undefined") {
@@ -1117,7 +1127,9 @@ export function loadChatSessions(): ChatSession[] {
 }
 
 export function saveChatSessions(sessions: ChatSession[]) {
+    assertIdentityWritable();
     const identityId = currentIdentityId();
+    if (sessions.some(session => session.identityId && session.identityId !== identityId)) throw new Error("会话归属已变化，请重新加载");
     const normalized = normalizeChatSessions(sessions.map(session => ({ ...session, identityId })));
     const redirectedMessages = redirectMessagesToPreferredSessions(normalized.redirects);
     const refreshed = refreshSessionPreviewMetadata(normalized.items);
@@ -1176,11 +1188,12 @@ export function createGroupSession(groupName: string, participantIds: string[], 
 }
 
 export function deleteChatSession(sessionId: string) {
+    assertCurrentSessionWritable(sessionId);
+    clearChatSessionMessages(sessionId); // 仍有会话归属时先校验并清理消息。
     const sessions = loadChatSessions();
     const filtered = sessions.filter(s => s.id !== sessionId);
     saveChatSessions(filtered);
     dbDeleteSession(sessionId);
-    clearChatSessionMessages(sessionId); // Cleanup associated messages
 }
 
 // 把一个会话的全部消息挪到另一个会话名下（重复会话合并用）。
@@ -1211,13 +1224,16 @@ export function loadChatMessages(sessionId: string, limit?: number): ChatMessage
 }
 
 /** Read-only messages for an explicitly authorized same-world identity. */
-export async function loadMessagesForIdentity(characterId: string, identityId: string, limit: number): Promise<ChatMessage[]> {
-    const identity = identityId;
-    const sessions = await chatDb.sessions.where("identityId").equals(identity).toArray();
+export async function loadMessagesForIdentity(characterId: string, identityId: string, limit?: number): Promise<ChatMessage[]> {
+    const { areIdentitiesInSameWorld } = await import("./user-world");
+    const requester = currentIdentityId();
+    if (requester !== identityId && !areIdentitiesInSameWorld(requester, identityId)) return [];
+    const sessions = await chatDb.sessions.where("identityId").equals(identityId).toArray();
     const targetSessions = sessions.filter(session => !session.isGroup && session.contactId === characterId);
-    const sessionIds = new Set(targetSessions.map(session => session.id));
-    const messages = (await chatDb.messages.toArray()).filter(message => sessionIds.has(message.sessionId));
-    return messages.sort(compareChatMessages).slice(-Math.max(1, limit));
+    const batches = await Promise.all(targetSessions.map(session => chatDb.messages.where("sessionId").equals(session.id).toArray()));
+    if (requester !== currentIdentityId() || (requester !== identityId && !areIdentitiesInSameWorld(requester, identityId))) return [];
+    const messages = batches.flat().sort(compareChatMessages);
+    return limit === undefined ? messages : limit <= 0 ? [] : messages.slice(-Math.floor(limit));
 }
 
 function createMessageId(): string {
@@ -1240,6 +1256,7 @@ export function pushChatMessage(msg: Omit<ChatMessage, "id" | "createdAt" | "sta
     status?: ChatMessageStatus;
     createdAt?: string;
 }): ChatMessage {
+    assertCurrentSessionWritable(msg.sessionId);
     if (_cacheIdentityId !== currentIdentityId()) resetChatStorageForIdentity();
     const owner = _sessionsCache.find(session => session.id === msg.sessionId);
     if (!owner || owner.identityId !== currentIdentityId()) {
@@ -1294,6 +1311,7 @@ export function pushChatMessage(msg: Omit<ChatMessage, "id" | "createdAt" | "sta
 }
 
 export function upsertImportedChatMessage(msg: ChatMessage): { message: ChatMessage; inserted: boolean } {
+    assertCurrentSessionWritable(msg.sessionId);
     const existing = _messagesCache.find(item => item.id === msg.id);
     if (existing) return { message: existing, inserted: false };
 
@@ -1659,6 +1677,7 @@ export function retractChatMessage(messageId: string) {
 }
 
 export function clearChatSessionMessages(sessionId: string) {
+    assertCurrentSessionWritable(sessionId);
     const deletedMessages = _messagesCache.filter(m => m.sessionId === sessionId);
     _messagesCache = _messagesCache.filter(m => m.sessionId !== sessionId);
     dbDeleteMessagesBySession(sessionId);

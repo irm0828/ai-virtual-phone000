@@ -36,7 +36,7 @@ import { clearChatOfflineTurns } from "@/lib/chat-offline-storage";
 import { removeChatSessionCompletely } from "@/lib/chat-session-remove";
 import { triggerDeleteFriendReaction } from "@/lib/friend-request-engine";
 import { loadCharacters } from "@/lib/character-storage";
-import { getCurrentGlobalIdentityId, getLinkedUserIdentities } from "@/lib/user-world";
+import { CharacterMemorySharing } from "@/components/memory/character-memory-sharing";
 import { isAgentComputerConfigured } from "@/lib/agent-computer";
 import { CharacterComputerPage } from "./character-computer-page";
 import { resolveUserIdentity, loadBindingConfig, loadPresets, resolveBinding } from "@/lib/settings-storage";
@@ -397,12 +397,7 @@ export function ChatSettingsPanel({
     // 流式生成：按会话区分（线上/线下），存 ChatSession 字段，默认关
     const [streamOnline, setStreamOnline] = useState(session.streamOnline === true);
     const [streamOffline, setStreamOffline] = useState(session.streamOffline === true);
-    const linkedUsers = getLinkedUserIdentities(getCurrentGlobalIdentityId());
-    const [memorySync, setMemorySync] = useState(() => ({
-        enabled: session.memorySync?.enabled === true,
-        depth: Math.max(1, Math.min(100, Number(session.memorySync?.depth) || 10)),
-        sources: session.memorySync?.sources || {},
-    }));
+
     const defaultBilingualPrompt = session.isGroup ? DEFAULT_GROUP_CHAT_BILINGUAL_PROMPT : DEFAULT_CHAT_BILINGUAL_PROMPT;
     const defaultOfflineBilingualPrompt = session.isGroup ? DEFAULT_GROUP_OFFLINE_CHAT_BILINGUAL_PROMPT : DEFAULT_OFFLINE_CHAT_BILINGUAL_PROMPT;
     const [bilingualTranslationPrompt, setBilingualTranslationPrompt] = useState(session.bilingualTranslationPrompt || defaultBilingualPrompt);
@@ -1083,33 +1078,7 @@ export function ChatSettingsPanel({
                                 </button>
                             </>
                         )}
-                        {!session.isGroup && linkedUsers.length > 0 && (
-                            <div className="menu-item" style={{ alignItems: "flex-start" }}>
-                                <ChatInfoIcon icon={Sparkles} color={BINDING_ACCENTS.memory} />
-                                <div className="menu-label-group">
-                                    <span className="menu-label">跨对话记忆同步</span>
-                                    <span className="menu-desc">仅同步已连接为同一世界的其他用户记忆</span>
-                                    <div className="flex flex-col gap-2 mt-2">
-                                        <Toggle checked={memorySync.enabled} onChange={checked => {
-                                            const sources = { ...memorySync.sources };
-                                            if (checked) linkedUsers.forEach(user => { if (!sources[user.id]) sources[user.id] = { shortTerm: false, longTerm: true, core: true }; });
-                                            const next = { ...memorySync, enabled: checked, sources };
-                                            setMemorySync(next);
-                                            updateSession({ memorySync: next });
-                                        }} />
-                                        {memorySync.enabled && <>
-                                            <label className="menu-desc">同步深度（条数）</label>
-                                            <input className="ui-input h-8 w-20" type="number" min={1} max={100} value={memorySync.depth} onChange={event => { const next = { ...memorySync, depth: Math.max(1, Math.min(100, Number(event.target.value) || 1)) }; setMemorySync(next); updateSession({ memorySync: next }); }} />
-                                            {linkedUsers.map(user => {
-                                                const current = memorySync.sources[user.id] || { shortTerm: false, longTerm: true, core: true };
-                                                const updateSource = (patch: Partial<typeof current>) => { const next = { ...memorySync, sources: { ...memorySync.sources, [user.id]: { ...current, ...patch } } }; setMemorySync(next); updateSession({ memorySync: next }); };
-                                                return <div key={user.id} className="flex flex-col gap-1"><span className="menu-desc">{user.name}</span><label className="menu-desc"><input type="checkbox" checked={current.shortTerm} onChange={event => updateSource({ shortTerm: event.target.checked })} /> 短期</label><label className="menu-desc"><input type="checkbox" checked={current.longTerm} onChange={event => updateSource({ longTerm: event.target.checked })} /> 长期</label><label className="menu-desc"><input type="checkbox" checked={current.core} onChange={event => updateSource({ core: event.target.checked })} /> 核心</label></div>;
-                                            })}
-                                        </>}
-                                    </div>
-                                </div>
-                            </div>
-                        )}
+                        {!session.isGroup && <CharacterMemorySharing characterId={session.contactId} legacy={session.memorySync} />}
                         <div className="menu-item">
                             <ChatInfoIcon icon={Smile} color={BINDING_ACCENTS.preset} />
                             <div className="menu-label-group">

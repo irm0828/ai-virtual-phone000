@@ -1,4 +1,10 @@
 import { loadChatSessions } from "./chat-storage";
+import { assertIdentityWritable } from "./identity-operation-state";
+
+function assertOfflineSessionWritable(sessionId: string): void {
+    assertIdentityWritable();
+    if (!loadChatSessions().some(session => session.id === sessionId)) throw new Error("身份已切换，线下记录写入已取消");
+}
 import { formatChatTimestamp } from "./llm-prompt-assembler";
 import { kvGet, kvRemove, kvSet, registerDynamicPrefix } from "./kv-db";
 
@@ -80,6 +86,8 @@ export function loadChatOfflineTurns(sessionId: string): ChatOfflineTurn[] {
 }
 
 export function saveChatOfflineTurns(sessionId: string, turns: ChatOfflineTurn[]): void {
+    assertOfflineSessionWritable(sessionId);
+    if (turns.some(turn => turn.sessionId !== sessionId)) throw new Error("线下记录会话归属不一致");
     const normalized = turns
         .map(normalizeTurn)
         .filter((turn): turn is ChatOfflineTurn => Boolean(turn))
