@@ -44,6 +44,7 @@ export function ApiSettings() {
     const [fetchedModels, setFetchedModels] = useState<Record<string, string[]>>({});
     const [isTesting, setIsTesting] = useState<Record<string, boolean>>({});
     const [testResult, setTestResult] = useState<Record<string, { success: boolean; message: string }>>({});
+    const [modelSearch, setModelSearch] = useState<Record<string, string>>({});
 
     // Load from localStorage on mount
     useEffect(() => {
@@ -362,28 +363,36 @@ export function ApiSettings() {
 
                                         <div className="flex flex-col gap-1">
                                             <label className="menu-desc ml-1">默认模型 (Default Model)</label>
-                                            <div className="flex gap-2">
-                                                {fetchedModels[config.id] && fetchedModels[config.id].length > 0 ? (
+                                            {fetchedModels[config.id] && fetchedModels[config.id].length > 0 ? (
+                                                <>
+                                                    <input
+                                                        type="search"
+                                                        value={modelSearch[config.id] ?? ""}
+                                                        onChange={(e) => setModelSearch(prev => ({ ...prev, [config.id]: e.target.value }))}
+                                                        placeholder="搜索模型..."
+                                                        className="ui-input"
+                                                        aria-label="搜索模型"
+                                                    />
                                                     <select
                                                         value={config.defaultModel}
                                                         onChange={(e) => updateConfig(config.id, { defaultModel: e.target.value })}
-                                                        className="ui-select flex-1"
+                                                        className="ui-select"
                                                     >
                                                         <option value="">请选择模型...</option>
-                                                        {fetchedModels[config.id].map(m => (
-                                                            <option key={m} value={m}>{m}</option>
-                                                        ))}
+                                                        {fetchedModels[config.id]
+                                                            .filter(m => m.toLowerCase().includes((modelSearch[config.id] ?? "").trim().toLowerCase()))
+                                                            .map(m => <option key={m} value={m}>{m}</option>)}
                                                     </select>
-                                                ) : (
-                                                    <input
-                                                        type="text"
-                                                        value={config.defaultModel}
-                                                        onChange={(e) => updateConfig(config.id, { defaultModel: e.target.value })}
-                                                        placeholder="gpt-4o, claude-3-opus..."
-                                                        className="ui-input flex-1"
-                                                    />
-                                                )}
-                                            </div>
+                                                </>
+                                            ) : (
+                                                <input
+                                                    type="text"
+                                                    value={config.defaultModel}
+                                                    onChange={(e) => updateConfig(config.id, { defaultModel: e.target.value })}
+                                                    placeholder="gpt-4o, claude-3-opus..."
+                                                    className="ui-input"
+                                                />
+                                            )}
                                         </div>
 
                                         <div className="flex gap-3 mt-1">
