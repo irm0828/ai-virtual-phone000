@@ -96,12 +96,14 @@ export function setFloatingDockAnchor(pos: FloatingDockPosition | null): void {
     ) {
         return;
     }
-    if (pos) {
-        try {
+    try {
+        if (pos) {
             localStorage.setItem(ANCHOR_STORAGE_KEY, JSON.stringify(pos));
-        } catch {
-            // ignore
+        } else {
+            localStorage.removeItem(ANCHOR_STORAGE_KEY);
         }
+    } catch {
+        // ignore
     }
     _dockState = {
         ..._dockState,
