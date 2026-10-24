@@ -34,7 +34,8 @@ export const NOVELAI_SAMPLER_OPTIONS = [
   { value: "k_dpmpp_2m", label: "DPM++ 2M" },
   { value: "k_dpmpp_2s_ancestral", label: "DPM++ 2S Ancestral" },
   { value: "k_dpmpp_sde", label: "DPM++ SDE" },
-  { value: "ddim", label: "DDIM" },
+  { value: "ddim_v3", label: "DDIM v3 (V4/V5)" },
+  { value: "ddim", label: "DDIM (V3)" },
 ] as const;
 
 export const NOVELAI_NOISE_SCHEDULE_OPTIONS = [
@@ -104,4 +105,62 @@ export function normalizeNovelAiScale(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value)
     ? Math.max(1, Math.min(30, Number(value.toFixed(1))))
     : NOVELAI_DEFAULT_SCALE;
+}
+
+export function isNovelAiV4OrNewerModel(model: string): boolean {
+  return /^nai-diffusion-(?:4(?:-5)?|5)-/i.test(model);
+}
+
+export function buildNovelAiGenerationParameters(options: {
+  model: string;
+  prompt: string;
+  negativePrompt?: string;
+  width: number;
+  height: number;
+  scale?: unknown;
+  sampler?: unknown;
+  steps?: unknown;
+  noiseSchedule?: unknown;
+  qualityToggle?: boolean;
+  smea?: boolean;
+  smeaDyn?: boolean;
+}): Record<string, unknown> {
+  const negativePrompt = options.negativePrompt || "";
+  const parameters: Record<string, unknown> = {
+    width: options.width,
+    height: options.height,
+    scale: normalizeNovelAiScale(options.scale),
+    sampler: normalizeNovelAiSampler(options.sampler),
+    steps: normalizeNovelAiSteps(options.steps),
+    n_samples: 1,
+    ucPreset: 0,
+    qualityToggle: options.qualityToggle !== false,
+    sm: options.smea === true,
+    sm_dyn: options.smeaDyn === true,
+    dynamic_thresholding: false,
+    controlnet_strength: 1,
+    legacy: false,
+    add_original_image: false,
+    uncond_scale: 1,
+    cfg_rescale: 0,
+    noise_schedule: normalizeNovelAiNoiseSchedule(options.noiseSchedule),
+  };
+
+  if (isNovelAiV4OrNewerModel(options.model)) {
+    parameters.params_version = 3;
+    parameters.v4_prompt = {
+      caption: { base_caption: options.prompt, char_captions: [] },
+      use_coords: false,
+      use_order: true,
+    };
+    parameters.v4_negative_prompt = {
+      caption: { base_caption: negativePrompt, char_captions: [] },
+      use_coords: false,
+      use_order: true,
+    };
+  } else {
+    parameters.negative_prompt = negativePrompt;
+  }
+
+  return parameters;
 }
